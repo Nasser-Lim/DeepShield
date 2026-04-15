@@ -32,7 +32,7 @@ class RunPodClient:
         payload = {"file_id": file_id, "image_url": image_url, "image_b64": image_b64}
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             r = await client.post(f"{self._base}/infer", json=payload)
-            if not r.is_success:
+            if r.status_code >= 400:
                 # Propagate the RunPod error detail directly to the caller
                 try:
                     detail = r.json().get("detail", r.text)

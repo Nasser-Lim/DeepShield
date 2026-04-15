@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 
+import httpx
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from ..schemas.analysis import AnalyzeResult
@@ -40,11 +41,10 @@ async def create_analysis(image: UploadFile = File(...)) -> AnalyzeResult:
     # Step 2: Run inference using the stored file_id
     try:
         infer = await client.infer(file_id=upload.file_id)
+    except httpx.HTTPStatusError as e:
+        # Forward the inference server's status code and message as-is
+        raise HTTPException(e.response.status_code, str(e)) from e
     except Exception as e:
-        import httpx as _httpx
-        if isinstance(e, _httpx.HTTPStatusError):
-            # Forward the inference server's status code and message as-is
-            raise HTTPException(e.response.status_code, str(e)) from e
         log.exception("inference failed")
         raise HTTPException(502, f"inference failed: {e}") from e
 
