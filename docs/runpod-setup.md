@@ -33,9 +33,9 @@
 │       │   └── spsl.py              (C2P-CLIP — CLIP ViT-L/14)
 │       └── requirements.txt
 ├── weights/
-│   ├── sbi_best.pth                 (~70MB)
-│   ├── fatformer_best.pth           (~1.2GB)
-│   └── c2pclip_best.pth             (~1.1GB)
+│   ├── sbi_best.pth                 (~135MB)
+│   ├── fatformer_best.pth           (~1.9GB)
+│   └── c2pclip_best.pth             (~1.2GB)
 └── venv/                            (Python 가상환경 — 재시작 후에도 보존)
 ```
 
@@ -169,10 +169,12 @@ source /workspace/venv/bin/activate && mkdir -p /tmp/deepshield/uploads && cd /w
 
 정상 기동 시 출력:
 ```
-INFO:inference:FaceDetector: using MTCNN
+INFO:inference:SBI: missing=0 unexpected=0
 INFO:inference:SBI: loaded ok
-INFO:inference:FatFormer: loaded ok
+WARNING:inference:FatFormer: full inference not yet implemented — placeholder active
+INFO:inference:C2P-CLIP: missing=N unexpected=2   (N=text_model 관련, 정상)
 INFO:inference:C2P-CLIP: loaded ok
+INFO:inference:FaceDetector: using MTCNN
 INFO:inference:Detectors ready: ['effort', 'xray', 'spsl']
 INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
@@ -194,12 +196,32 @@ RUNPOD_INFERENCE_URL=https://[POD_ID]-8000.proxy.runpod.net
 
 ---
 
-## Pod 재시작 후 복구 (한 줄)
+## Pod 재시작 후 복구
 
-`/workspace/`는 Volume이라 코드·가중치·venv 모두 보존됩니다.
+> **주의**: RunPod의 **Stop → Start**는 Volume(`/workspace/`)은 보존하지만
+> 컨테이너 자체는 재생성되어 **Public IP/URL이 바뀌고**, `/root/`, `/tmp/`
+> 등 Volume 외부는 초기화됩니다. Pod를 완전히 **Delete**하고 새로 만드는
+> 경우에도 같은 Volume을 재연결하면 아래 한 줄 복구가 동작합니다.
+
+`/workspace/`는 Volume이라 코드(deepshield), 가중치(weights), venv 모두 보존됩니다.
+
+**복구 한 줄:**
 
 ```
-cd /workspace/deepshield && git pull && source /workspace/venv/bin/activate && pip install --quiet transformers accelerate open_clip_torch pytorch_wavelets && mkdir -p /tmp/deepshield/uploads && cd services/runpod-inference && DEVICE=cuda UPLOAD_DIR=/tmp/deepshield/uploads python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
+cd /workspace/deepshield && git pull && source /workspace/venv/bin/activate && pip install --quiet transformers accelerate open_clip_torch pytorch_wavelets mtcnn tensorflow-cpu && mkdir -p /tmp/deepshield/uploads && cd services/runpod-inference && DEVICE=cuda UPLOAD_DIR=/tmp/deepshield/uploads python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
+```
+
+> `pip install --quiet`는 이미 설치된 패키지면 즉시 통과하므로 안전망으로
+> 포함했습니다. venv가 깨졌다면 이 명령이 재설치까지 수행합니다.
+
+**재시작 후 반드시 할 것:**
+
+1. **새 Public URL 확인**: Pod → **Connect** → **HTTP Service [8000]**
+2. **로컬 `.env` 업데이트**: 새 URL로 `RUNPOD_INFERENCE_URL` 교체
+3. **로컬 서비스 재시작**: `.\start.ps1`
+
+```
+RUNPOD_INFERENCE_URL=https://[NEW_POD_ID]-8000.proxy.runpod.net
 ```
 
 ---
@@ -208,11 +230,15 @@ cd /workspace/deepshield && git pull && source /workspace/venv/bin/activate && p
 
 | 슬롯 | 모델 | 아키텍처 | 입력 | 앙상블 가중치 |
 |---|---|---|---|---|
-| `effort` | SBI (CVPR 2022) | EfficientNet-B4 | 380×380 ImageNet 정규화 | 0.40 |
-| `xray` | FatFormer (CVPR 2024) | CLIP ViT-L/14 + adapter | 224×224 CLIP 정규화 | 0.40 |
-| `spsl` | C2P-CLIP (AAAI 2025) | CLIP ViT-L/14 + C2P | 224×224 CLIP 정규화 | 0.20 |
+| `effort` | SBI (CVPR 2022) | EfficientNet-B4 | 380×380 ImageNet 정규화 | 0.50 |
+| `xray` | FatFormer (CVPR 2024) | CLIP ViT-L/14 + adapter | 224×224 CLIP 정규화 | **0.00 (placeholder)** |
+| `spsl` | C2P-CLIP (AAAI 2025) | HF CLIPModel ViT-L/14 | 224×224 CLIP 정규화 | 0.50 |
 
-판정 기준: `final = (0.40×SBI + 0.40×FatFormer + 0.20×C2P-CLIP)`
+> FatFormer는 language-guided alignment + text-guided interactor 추론 경로가
+> 가중치만으로 재구현이 어려워 현재 중립값(0.5) placeholder로 동작합니다.
+> 가중치 0으로 앙상블 기여는 없습니다. 추론 경로 이식은 후속 작업.
+
+판정 기준: `final = (0.50×SBI + 0.00×FatFormer + 0.50×C2P-CLIP)`
 - `< 0.30` → **safe**
 - `0.30 ~ 0.70` → **caution**
 - `≥ 0.70` → **risk**
@@ -223,9 +249,12 @@ cd /workspace/deepshield && git pull && source /workspace/venv/bin/activate && p
 
 | 증상 | 원인 | 해결 |
 |---|---|---|
-| `WARNING: ... — using placeholder` | 가중치 로드 실패 | `/workspace/weights/` 파일 확인, probe 결과로 키 매핑 재확인 |
-| `No module named 'open_clip'` | venv 활성화 안 됨 또는 미설치 | `source /workspace/venv/bin/activate && pip install open_clip_torch` |
-| `No module named 'pytorch_wavelets'` | 미설치 | `pip install pytorch_wavelets` |
+| `FatFormer: ... placeholder active` | **정상** — FatFormer 추론 경로 미구현 | 무시 (weight_xray=0으로 앙상블 기여 없음) |
+| `SBI: ... using placeholder` | 가중치 키 매핑 실패 | `ls /workspace/weights/sbi_best.pth` 확인, probe 재실행 |
+| `C2P-CLIP: ... using placeholder` | 체크포인트 손상 / 누락 | 가중치 파일 크기 1.2GB 확인, 재업로드 |
+| `No module named 'transformers'` | venv 패키지 누락 | 위 복구 한 줄에 이미 `pip install transformers`가 포함되어 있음 |
+| `No module named 'open_clip'` / `'pytorch_wavelets'` / `'mtcnn'` | 미설치 | 복구 한 줄 실행 또는 개별 `pip install` |
 | `422 Unprocessable Entity` | MTCNN 얼굴 미감지 | 얼굴이 포함된 이미지 사용 |
-| `CUDA out of memory` | GPU 메모리 부족 (FatFormer+C2P-CLIP 동시 로드 ~4GB) | `nvidia-smi`로 좀비 프로세스 확인 후 kill |
-| Pod 공개 URL 502/503 | 서버 미기동 | 위 복구 절차 실행 |
+| `CUDA out of memory` | GPU 메모리 부족 | `nvidia-smi`로 좀비 프로세스 확인 후 `kill -9 PID` |
+| 로컬 앱에서 502/503 | Pod 재시작 후 URL 변경 → `.env` 미업데이트 | RunPod에서 새 URL 확인 → `.env` 교체 → `.\start.ps1` |
+| 서버는 기동했는데 `Detectors ready: []` | 세 모델 모두 로드 실패 | 가중치 파일 3개 존재 확인, 로그에서 각 모델 missing/unexpected 수 확인 |
