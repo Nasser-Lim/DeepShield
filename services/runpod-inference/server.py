@@ -71,7 +71,6 @@ async def lifespan(app: FastAPI):
         d.load(DEVICE)
     state["detectors"] = {d.name: d for d in detectors}
     state["face_detector"] = FaceDetector()
-    log.info("Detectors ready: %s", list(state["detectors"]))
     yield
     state.clear()
 
