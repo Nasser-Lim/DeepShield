@@ -70,6 +70,7 @@ export default function Home() {
               <EvidenceViewer
                 originalUrl={originalUrl}
                 overlayB64={result.scores.overlay_b64}
+                faceBbox={result.scores.face_bbox}
               />
             )}
             <ModelScoreTabs scores={result.scores} />
