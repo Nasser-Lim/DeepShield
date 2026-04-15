@@ -144,7 +144,15 @@ async def infer(req: InferRequest) -> InferResponse:
         run(detectors["spsl"]),
     )
 
-    overlay = overlay_on_face(crop.patch, xray_out.heatmap)
+    # Use the first available heatmap for overlay, or just the face crop
+    _overlay_heatmap = next(
+        (o.heatmap for o in [xray_out, effort_out, spsl_out] if o.heatmap is not None),
+        None,
+    )
+    if _overlay_heatmap is not None:
+        overlay = overlay_on_face(crop.patch, _overlay_heatmap)
+    else:
+        overlay = crop.patch
     overlay_b64 = encode_png_b64(overlay)
 
     def pack(out) -> ModelScoreOut:
