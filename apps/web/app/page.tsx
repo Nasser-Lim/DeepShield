@@ -34,9 +34,9 @@ export default function Home() {
       <section>
         <h1 className="text-2xl font-bold mb-2 text-slate-900">이미지 진위 검증</h1>
         <p className="text-slate-600 mb-4 leading-relaxed">
-          제보 이미지를 드래그하거나 클릭해 업로드하세요.{" "}
-          <strong className="font-semibold text-slate-800">Effort · Face X-ray · SPSL</strong>{" "}
-          세 탐지기가 동시에 추론하고 가중 투표합니다.
+          제보 이미지를 업로드하면{" "}
+          <strong className="font-semibold text-slate-800">Xception · F3Net · SPSL</strong>{" "}
+          세 모델이 독립적으로 추론하고 가중 앙상블로 최종 판정합니다.
         </p>
         <DropZone onResult={handleResult} />
       </section>

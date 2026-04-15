@@ -29,7 +29,16 @@ Start-Sleep -Seconds 3
 $apiJob = Start-Job -Name "api" -ScriptBlock {
     param($root)
     Set-Location "$root\apps\api"
-    $env:RUNPOD_INFERENCE_URL = "http://localhost:8000"
+    # Load .env from repo root
+    $envFile = "$root\.env"
+    if (Test-Path $envFile) {
+        Get-Content $envFile | ForEach-Object {
+            if ($_ -match "^\s*([^#][^=]+)=(.*)$") {
+                $key = $Matches[1].Trim(); $val = $Matches[2].Trim()
+                [System.Environment]::SetEnvironmentVariable($key, $val, "Process")
+            }
+        }
+    }
     .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8080
 } -ArgumentList $root
 
