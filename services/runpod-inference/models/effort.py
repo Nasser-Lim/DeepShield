@@ -75,16 +75,35 @@ class EffortDetector(DetectorBase):
                 elif k.startswith("_fc"): k = k.replace("_fc", "classifier")
                 
                 # Blocks
-                if k.startswith("_blocks"):
-                    k = k.replace("_blocks", "blocks")
-                    k = k.replace("._expand_conv", ".conv_pw")
-                    k = k.replace("._bn0", ".bn1")
-                    k = k.replace("._depthwise_conv", ".conv_dw")
-                    k = k.replace("._bn1", ".bn2")
-                    k = k.replace("._se_reduce", ".se.conv_reduce")
-                    k = k.replace("._se_expand", ".se.conv_expand")
-                    k = k.replace("._project_conv", ".conv_pwl")
-                    k = k.replace("._bn2", ".bn3")
+                if k.startswith("_blocks."):
+                    parts = k.split('.')
+                    if len(parts) >= 3:
+                        # old format: _blocks.15._expand_conv.weight
+                        try:
+                            old_idx = int(parts[1])
+                            # B4 stages: [2, 4, 4, 6, 6, 8, 2]
+                            stages = [2, 4, 4, 6, 6, 8, 2]
+                            stage = 0
+                            block = old_idx
+                            for s_len in stages:
+                                if block < s_len:
+                                    break
+                                block -= s_len
+                                stage += 1
+                                
+                            suffix = ".".join(parts[2:])
+                            suffix = suffix.replace("_expand_conv", "conv_pw")
+                            suffix = suffix.replace("_bn0", "bn1")
+                            suffix = suffix.replace("_depthwise_conv", "conv_dw")
+                            suffix = suffix.replace("_bn1", "bn2")
+                            suffix = suffix.replace("_se_reduce", "se.conv_reduce")
+                            suffix = suffix.replace("_se_expand", "se.conv_expand")
+                            suffix = suffix.replace("_project_conv", "conv_pwl")
+                            suffix = suffix.replace("_bn2", "bn3")
+                            
+                            k = f"blocks.{stage}.{block}.{suffix}"
+                        except ValueError:
+                            pass
                     
                 return "net." + k
 
