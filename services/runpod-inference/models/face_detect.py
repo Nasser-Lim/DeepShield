@@ -30,7 +30,7 @@ class FaceDetector:
         faces = self._cascade.detectMultiScale(gray, 1.2, 5, minSize=(64, 64))
 
         if len(faces) == 0:
-            return FaceCrop(bbox=(0, 0, w, h), patch=image_bgr.copy())
+            raise ValueError("no_face_detected")
 
         # Largest face wins
         x, y, fw, fh = max(faces, key=lambda b: b[2] * b[3])

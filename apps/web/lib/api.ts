@@ -28,8 +28,14 @@ export async function analyzeImage(file: File): Promise<AnalyzeResult> {
 
   const res = await fetch(`${API_URL}/analyze`, { method: "POST", body: form });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`분석 실패 (${res.status}): ${text}`);
+    let message: string;
+    try {
+      const body = await res.json();
+      message = body?.detail ?? body?.message ?? JSON.stringify(body);
+    } catch {
+      message = await res.text();
+    }
+    throw new Error(message);
   }
   return (await res.json()) as AnalyzeResult;
 }

@@ -133,7 +133,12 @@ async def infer(req: InferRequest) -> InferResponse:
 
     face_detector: FaceDetector = state["face_detector"]
     detectors: dict[str, DetectorBase] = state["detectors"]
-    crop = face_detector.detect(image)
+    try:
+        crop = face_detector.detect(image)
+    except ValueError as e:
+        if str(e) == "no_face_detected":
+            raise HTTPException(422, "이미지에서 얼굴을 감지할 수 없습니다. 얼굴이 포함된 이미지를 업로드해 주세요.")
+        raise
 
     async def run(det: DetectorBase):
         return await asyncio.to_thread(det.predict, crop.patch)
