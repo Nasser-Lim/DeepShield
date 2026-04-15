@@ -27,7 +27,7 @@ class FaceDetector:
     def detect(self, image_bgr: np.ndarray) -> FaceCrop:
         h, w = image_bgr.shape[:2]
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-        faces = self._cascade.detectMultiScale(gray, 1.2, 5, minSize=(64, 64))
+        faces = self._cascade.detectMultiScale(gray, 1.1, 3, minSize=(40, 40))
 
         if len(faces) == 0:
             raise ValueError("no_face_detected")

@@ -32,7 +32,15 @@ class RunPodClient:
         payload = {"file_id": file_id, "image_url": image_url, "image_b64": image_b64}
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             r = await client.post(f"{self._base}/infer", json=payload)
-            r.raise_for_status()
+            if not r.is_success:
+                # Propagate the RunPod error detail directly to the caller
+                try:
+                    detail = r.json().get("detail", r.text)
+                except Exception:
+                    detail = r.text
+                raise httpx.HTTPStatusError(
+                    detail, request=r.request, response=r
+                )
             return InferResponse.model_validate(r.json())
 
     async def healthz(self) -> dict:
