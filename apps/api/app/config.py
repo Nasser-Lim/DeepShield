@@ -15,13 +15,16 @@ class Settings(BaseSettings):
     runpod_inference_timeout: float = 60.0
 
     # Ensemble weights (must sum to 1.0)
-    weight_effort: float = 0.40
-    weight_xray: float = 0.35
-    weight_spsl: float = 0.25
+    # F3Net (xray) has systematic upward bias on real photos → lower its weight.
+    # Xception (effort) is most reliable; SPSL complements phase artifacts.
+    weight_effort: float = 0.50
+    weight_xray: float = 0.20
+    weight_spsl: float = 0.30
 
     # Verdict thresholds
-    threshold_safe: float = 0.30
-    threshold_risk: float = 0.70
+    # Raised to compensate for F3Net's positive bias on real-camera images.
+    threshold_safe: float = 0.35
+    threshold_risk: float = 0.75
 
 
 @lru_cache
