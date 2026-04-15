@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  inference:
+    build: ./services/runpod-inference
+    env_file: .env
+    ports:
+      - "8000:8000"
+    environment:
+      - DEVICE=cpu          # GPU 없는 로컬 개발용. RunPod에선 cuda로 덮어씀
+      - UPLOAD_DIR=/tmp/deepshield/uploads
+    # GPU 사용 시 아래 주석 해제
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  api:
+    build: ./apps/api
+    env_file: .env
+    ports:
+      - "8080:8080"
+    environment:
+      - RUNPOD_INFERENCE_URL=http://inference:8000
+    depends_on:
+      - inference
+
+  web:
+    build: ./apps/web
+    env_file: .env
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+    depends_on:
+      - api
