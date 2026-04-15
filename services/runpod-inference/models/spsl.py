@@ -67,13 +67,12 @@ class SPSLDetector(DetectorBase):
                         "openai/clip-vit-large-patch14",
                         ignore_mismatched_sizes=True,
                     )
-                    # fc head attached to model — must be model.fc to match keys
-                    self.model.fc = nn.Linear(768, 2)
+                    # fc head: 1-class (sigmoid) per checkpoint — fake probability
+                    self.model.fc = nn.Linear(768, 1)
 
                 def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
                     feats = self.model.get_image_features(pixel_values=pixel_values)
-                    # get_image_features already applies visual_projection + L2 norm
-                    return self.model.fc(feats)   # (B, 2) logits
+                    return self.model.fc(feats)   # (B, 1) logit → sigmoid
 
             net = _C2PCLIP()
             ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=False)
@@ -114,7 +113,6 @@ class SPSLDetector(DetectorBase):
         ])
         x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            logits = self.model_wrapper(x)           # (1, 2)
-            probs = torch.softmax(logits, dim=1)
-            score = float(probs[0, 1].item())        # fake class
+            logit = self.model_wrapper(x)            # (1, 1)
+            score = float(torch.sigmoid(logit)[0, 0].item())
         return DetectorOutput(score=score, heatmap=None)

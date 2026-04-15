@@ -18,9 +18,12 @@ class Settings(BaseSettings):
     # effort = SBI (CVPR 2022)    — blending artifact detector
     # xray   = FatFormer (CVPR 2024) — CLIP-based forgery-aware transformer
     # spsl   = C2P-CLIP (AAAI 2025)  — category prompt CLIP, low false-positive
-    weight_effort: float = 0.40
-    weight_xray: float = 0.40
-    weight_spsl: float = 0.20
+    #
+    # FatFormer inference path is not yet implemented (placeholder neutral 0.5).
+    # Slot weight is 0.0 until the language-guided alignment forward is ported.
+    weight_effort: float = 0.50
+    weight_xray: float = 0.00
+    weight_spsl: float = 0.50
 
     # Verdict thresholds
     threshold_safe: float = 0.30

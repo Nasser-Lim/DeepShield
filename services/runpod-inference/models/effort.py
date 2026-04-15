@@ -60,6 +60,29 @@ class EffortDetector(DetectorBase):
                 sd = ckpt.get("state_dict", ckpt.get("model", ckpt))
             else:
                 sd = ckpt
+
+            # SBI checkpoint uses old timm naming (e.g. "net._conv_stem.weight").
+            # Modern timm uses "net.conv_stem.weight" — strip the underscore
+            # prefix from internal module names so keys align.
+            def _rename(k: str) -> str:
+                # net._conv_stem.weight    → net.conv_stem.weight
+                # net._bn0.weight          → net.bn1.weight  (renamed in timm 0.6+)
+                # net._blocks.X.Y          → net.blocks.X.Y
+                # net._conv_head, _bn1     → net.conv_head, net.bn2
+                # net._fc                  → net.classifier
+                if k.startswith("net._"):
+                    rest = k[len("net._"):]
+                    # Special-case the renamed top-level layers
+                    if rest.startswith("bn0."):
+                        rest = "bn1." + rest[len("bn0."):]
+                    elif rest.startswith("bn1."):
+                        rest = "bn2." + rest[len("bn1."):]
+                    elif rest.startswith("fc."):
+                        rest = "classifier." + rest[len("fc."):]
+                    return "net." + rest
+                return k
+
+            sd = {_rename(k): v for k, v in sd.items()}
             missing, unexpected = net.load_state_dict(sd, strict=False)
             log.info("SBI: missing=%d unexpected=%d", len(missing), len(unexpected))
             if missing:
