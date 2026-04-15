@@ -81,11 +81,16 @@ class SPSLDetector(DetectorBase):
             else:
                 sd = ckpt
             missing, unexpected = net.load_state_dict(sd, strict=False)
+            
+            # C2P-CLIP checkpoing only saved vision_model and fc.
+            # It's expected to miss text_model/logit_scale keys.
+            missing_filtered = [k for k in missing if not (k.startswith("model.text_model") or k == "model.logit_scale")]
+            
             log.info(
-                "C2P-CLIP: missing=%d unexpected=%d", len(missing), len(unexpected)
+                "C2P-CLIP: missing=%d (filtered=%d) unexpected=%d", len(missing), len(missing_filtered), len(unexpected)
             )
-            if missing:
-                log.warning("C2P-CLIP missing keys (first 5): %s", missing[:5])
+            if missing_filtered:
+                log.warning("C2P-CLIP missing keys (first 5): %s", missing_filtered[:5])
             self.model_wrapper = net.to(device).eval()
             self._use_placeholder = False
             log.info("C2P-CLIP: loaded ok")

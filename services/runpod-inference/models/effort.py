@@ -48,11 +48,11 @@ class EffortDetector(DetectorBase):
                     # matching the SBI checkpoint (trained with timm <=0.6).
                     # Attribute must be "net" to match "net.*" checkpoint keys.
                     self.net = timm.create_model(
-                        "tf_efficientnet_b4", pretrained=False, num_classes=1
+                        "tf_efficientnet_b4", pretrained=False, num_classes=2
                     )
 
                 def forward(self, x: torch.Tensor) -> torch.Tensor:
-                    return self.net(x)  # (B, 1) logit
+                    return self.net(x)  # (B, 2) logits
 
             net = _SBINet()
             ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=False)
@@ -116,5 +116,5 @@ class EffortDetector(DetectorBase):
         x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
         with torch.no_grad():
             logit = self.model(x)
-            score = float(torch.sigmoid(logit)[0, 0].item())
+            score = float(torch.softmax(logit, dim=1)[0, 1].item())
         return DetectorOutput(score=score, heatmap=None)
