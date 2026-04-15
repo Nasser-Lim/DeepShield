@@ -11,7 +11,7 @@
 | Volume Mount Path | `/volume` |
 | Expose HTTP Port | `8000` |
 
-> Volume(`/volume`)은 Pod을 Stop/재시작해도 유지됩니다.  
+> Volume(`/volume`)은 Pod을 Stop/재시작해도 유지됩니다.
 > 모델 가중치는 모두 `/volume/weights/`에 저장합니다.
 
 ---
@@ -19,24 +19,29 @@
 ## 디렉토리 구조
 
 ```
-/volume/                          ← RunPod Volume (영구 보존)
+/volume/                          (RunPod Volume - 영구 보존)
 └── weights/
-    ├── deepfakebench/            ← SCLBD/DeepfakeBench (Effort + SPSL 포함)
-    │   └── training/detectors/
-    │       ├── effort_detector.py
-    │       └── spsl_detector.py
-    └── xray/                     ← Face X-ray (별도 저장소)
-        └── repo/
+    └── deepfakebench/            (SCLBD/DeepfakeBench - Xception + F3Net + SPSL 포함)
+        ├── training/
+        │   ├── detectors/
+        │   │   ├── xception_detector.py
+        │   │   ├── f3net_detector.py
+        │   │   └── spsl_detector.py
+        │   └── weights/          (가중치 .pth 파일)
+        │       ├── xception_best.pth
+        │       ├── f3net_best.pth
+        │       └── spsl_best.pth
+        └── pretrained/           (backbone 사전학습 가중치)
 
-/workspace/                       ← Container Disk (재시작 시 초기화)
+/workspace/                       (Container Disk - 재시작 시 초기화)
 └── deepshield/
     └── services/
         └── runpod-inference/
             ├── server.py
             ├── models/
-            │   ├── effort.py
-            │   ├── face_xray.py
-            │   └── spsl.py
+            │   ├── effort.py     (Xception wrapper)
+            │   ├── face_xray.py  (F3Net wrapper)
+            │   └── spsl.py       (SPSL wrapper)
             ├── utils/
             └── requirements.txt
 ```
@@ -56,7 +61,7 @@ apt-get update && apt-get install -y git wget curl unzip libgl1 libglib2.0-0 nan
 > Volume이 처음 마운트된 경우 한 번만 실행합니다.
 
 ```bash
-mkdir -p /volume/weights/deepfakebench /volume/weights/xray/repo && ls -la /volume/weights/
+mkdir -p /volume/weights/deepfakebench/training/weights /volume/weights/deepfakebench/training/pretrained && ls -la /volume/weights/
 ```
 
 ---
@@ -64,16 +69,7 @@ mkdir -p /volume/weights/deepfakebench /volume/weights/xray/repo && ls -la /volu
 ## Step 3 — 프로젝트 코드 배포
 
 ```bash
-mkdir -p /workspace/deepshield
-cd /workspace/deepshield
-
-# Git으로 클론
-git clone https://github.com/Nasser-Lim/DeepShield.git .
-
-# 또는 로컬에서 scp로 업로드 (로컬 터미널에서 실행)
-# scp -r ./services/runpod-inference root@[POD_IP]:/workspace/deepshield/services/
-
-cd /workspace/deepshield/services/runpod-inference
+mkdir -p /workspace/deepshield && cd /workspace/deepshield && git clone https://github.com/Nasser-Lim/DeepShield.git . && cd /workspace/deepshield/services/runpod-inference
 ```
 
 ---
@@ -94,170 +90,51 @@ python3 -c "import torch; print('CUDA:', torch.cuda.is_available(), '|', torch.c
 
 예상 출력:
 ```
-CUDA available : True
-Device         : NVIDIA RTX A5000
-VRAM           : 24.0 GB
+CUDA: True | NVIDIA RTX A5000 | 24.0 GB
 ```
 
 ---
 
-## Step 6 — 모델 저장소 클론 (Volume에 저장)
+## Step 6 — 모델 저장소 클론 및 가중치 다운로드 (Volume에 저장)
 
-> Effort와 SPSL은 [SCLBD/DeepfakeBench](https://github.com/SCLBD/DeepfakeBench)에 통합되어 있습니다.  
-> Face X-ray만 별도 저장소([neverUseThisName/Face-X-Ray](https://github.com/neverUseThisName/Face-X-Ray))를 사용합니다.
+> 세 모델(Xception, F3Net, SPSL)은 모두 [SCLBD/DeepfakeBench](https://github.com/SCLBD/DeepfakeBench)에 통합되어 있습니다.
 
-### DeepfakeBench (Effort + SPSL)
+### DeepfakeBench 저장소 클론
 
 ```bash
-cd /volume/weights && git clone https://github.com/SCLBD/DeepfakeBench.git deepfakebench
-
-ls /volume/weights/deepfakebench/training/detectors/ | grep -E "effort|spsl"
+cd /volume/weights && git clone https://github.com/SCLBD/DeepfakeBench.git deepfakebench && ls /volume/weights/deepfakebench/training/detectors/ | grep -E "xception|f3net|spsl"
 ```
 
-DeepfakeBench의 사전학습 가중치는 저장소 README의 Google Drive 링크에서 다운로드합니다:
+### 모델 가중치 다운로드 (v1.0.1)
 
 ```bash
-# README에서 가중치 링크 확인
-cat /volume/weights/deepfakebench/README.md | grep -A5 -i "pretrained\|weight\|checkpoint"
+cd /volume/weights/deepfakebench && wget -O training/weights/xception_best.pth "https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.1/xception_best.pth" && wget -O training/weights/f3net_best.pth "https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.1/f3net_best.pth" && wget -O training/weights/spsl_best.pth "https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.1/spsl_best.pth"
 ```
 
-### Face X-ray
+### Backbone 사전학습 가중치 다운로드 (v1.0.0)
 
 ```bash
-cd /volume/weights/xray/repo && git clone https://github.com/neverUseThisName/Face-X-Ray.git .
-
-ls /volume/weights/xray/repo/
+cd /volume/weights/deepfakebench && wget -O pretrained.zip "https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.0/pretrained.zip" && unzip pretrained.zip -d training/pretrained/ && rm pretrained.zip
 ```
 
 ### 전체 확인
 
 ```bash
-find /volume/weights -name "*.pth" -o -name "*.pt" -o -name "*.ckpt" | sort
-du -sh /volume/weights/
+find /volume/weights -name "*.pth" -o -name "*.pt" -o -name "*.ckpt" | sort && du -sh /volume/weights/
 ```
 
 ---
 
-## Step 7 — 모델 코드 교체
+## Step 7 — 모델 코드 확인
 
-각 모델 파일의 `load` / `predict`를 실제 가중치 로드 코드로 교체합니다.
+`services/runpod-inference/models/` 파일들은 이미 실제 가중치 로드 코드를 포함하고 있습니다.  
+가중치 파일이 없으면 자동으로 플레이스홀더(SHA-1 해시 기반 더미 점수)로 폴백합니다.
 
-### effort.py
-
-```bash
-nano /workspace/deepshield/services/runpod-inference/models/effort.py
-```
-
-```python
-import sys
-import torch
-import numpy as np
-from .base import DetectorBase, DetectorOutput
-
-class EffortDetector(DetectorBase):
-    name = "effort"
-
-    def load(self, device: str) -> None:
-        sys.path.insert(0, "/volume/weights/deepfakebench")
-        from training.detectors.effort_detector import EffortDetector as Net
-        self.model = Net()
-        ckpt = torch.load("/volume/weights/deepfakebench/pretrained/effort.pth", map_location=device)
-        self.model.load_state_dict(ckpt, strict=False)
-        self.model.to(device).eval()
-        self.device = device
-
-    def predict(self, face_bgr: np.ndarray) -> DetectorOutput:
-        from torchvision import transforms
-        tf = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5]*3, [0.5]*3),
-        ])
-        x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            score = float(torch.sigmoid(self.model(x)).item())
-        return DetectorOutput(score=score, heatmap=None)
-```
-
-### face_xray.py
-
-```bash
-nano /workspace/deepshield/services/runpod-inference/models/face_xray.py
-```
-
-```python
-import sys
-import torch
-import numpy as np
-from .base import DetectorBase, DetectorOutput
-
-class FaceXrayDetector(DetectorBase):
-    name = "xray"
-
-    def load(self, device: str) -> None:
-        sys.path.insert(0, "/volume/weights/xray/repo")
-        # Face-X-Ray 저장소의 실제 클래스명을 README에서 확인 후 교체
-        from model import BiSeNet as Net
-        self.model = Net(n_classes=2)
-        ckpt = torch.load("/volume/weights/xray/repo/pretrained/xray.pth", map_location=device)
-        self.model.load_state_dict(ckpt, strict=False)
-        self.model.to(device).eval()
-        self.device = device
-
-    def predict(self, face_bgr: np.ndarray) -> DetectorOutput:
-        from torchvision import transforms
-        tf = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.Resize((256, 256)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5]*3, [0.5]*3),
-        ])
-        x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            out = self.model(x)
-            score = float(torch.sigmoid(out).item())
-        return DetectorOutput(score=score, heatmap=None)
-```
-
-### spsl.py
-
-```bash
-nano /workspace/deepshield/services/runpod-inference/models/spsl.py
-```
-
-```python
-import sys
-import torch
-import numpy as np
-from .base import DetectorBase, DetectorOutput
-
-class SPSLDetector(DetectorBase):
-    name = "spsl"
-
-    def load(self, device: str) -> None:
-        sys.path.insert(0, "/volume/weights/deepfakebench")
-        from training.detectors.spsl_detector import SPSLDetector as Net
-        self.model = Net()
-        ckpt = torch.load("/volume/weights/deepfakebench/pretrained/spsl.pth", map_location=device)
-        self.model.load_state_dict(ckpt, strict=False)
-        self.model.to(device).eval()
-        self.device = device
-
-    def predict(self, face_bgr: np.ndarray) -> DetectorOutput:
-        from torchvision import transforms
-        tf = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.Resize((256, 256)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.5]*3, [0.5]*3),
-        ])
-        x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            out = self.model(x)
-            score = float(torch.sigmoid(out).item())
-        return DetectorOutput(score=score, heatmap=None)
-```
+| 파일 | 모델 | 가중치 경로 |
+|---|---|---|
+| `effort.py` | Xception | `/volume/weights/deepfakebench/training/weights/xception_best.pth` |
+| `face_xray.py` | F3Net | `/volume/weights/deepfakebench/training/weights/f3net_best.pth` |
+| `spsl.py` | SPSL | `/volume/weights/deepfakebench/training/weights/spsl_best.pth` |
 
 ---
 
@@ -318,15 +195,11 @@ RUNPOD_INFERENCE_URL=https://[POD_ID]-8000.proxy.runpod.net
 
 ## Pod 재시작 시 복구 절차
 
-Container Disk(`/workspace`)는 재시작 시 초기화됩니다.  
+Container Disk(`/workspace`)는 재시작 시 초기화됩니다.
 Volume(`/volume/weights`)은 보존되므로 저장소 클론·가중치 다운로드는 생략하고 아래만 재실행합니다.
 
 ```bash
-cd /workspace && git clone https://github.com/YOUR_REPO/DeepShield.git deepshield
-
-cd /workspace/deepshield/services/runpod-inference && pip install -r requirements.txt && pip install torchvision==0.19.1
-
-export DEVICE=cuda UPLOAD_DIR=/tmp/deepshield/uploads && mkdir -p $UPLOAD_DIR && python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
+cd /workspace && git clone https://github.com/Nasser-Lim/DeepShield.git deepshield && cd /workspace/deepshield/services/runpod-inference && pip install -r requirements.txt && pip install torchvision==0.19.1 && export DEVICE=cuda UPLOAD_DIR=/tmp/deepshield/uploads && mkdir -p $UPLOAD_DIR && python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 > 재시작 자동화가 필요하면 Pod 생성 시 **Startup Command**에 위 명령어를 등록하세요.
