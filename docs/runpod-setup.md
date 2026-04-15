@@ -21,14 +21,11 @@
 ```
 /volume/                          ← RunPod Volume (영구 보존)
 └── weights/
-    ├── effort/
-    │   ├── effort.pth            ← Effort 모델 가중치
-    │   └── repo/                 ← git clone 소스
-    ├── xray/
-    │   ├── xray.pth              ← Face X-ray 가중치
-    │   └── repo/
-    └── spsl/
-        ├── spsl.pth              ← SPSL 가중치
+    ├── deepfakebench/            ← SCLBD/DeepfakeBench (Effort + SPSL 포함)
+    │   └── training/detectors/
+    │       ├── effort_detector.py
+    │       └── spsl_detector.py
+    └── xray/                     ← Face X-ray (별도 저장소)
         └── repo/
 
 /workspace/                       ← Container Disk (재시작 시 초기화)
@@ -59,7 +56,7 @@ apt-get update && apt-get install -y git wget curl unzip libgl1 libglib2.0-0 nan
 > Volume이 처음 마운트된 경우 한 번만 실행합니다.
 
 ```bash
-mkdir -p /volume/weights/effort/repo /volume/weights/xray/repo /volume/weights/spsl/repo && ls -la /volume/weights/
+mkdir -p /volume/weights/deepfakebench /volume/weights/xray/repo && ls -la /volume/weights/
 ```
 
 ---
@@ -71,7 +68,7 @@ mkdir -p /workspace/deepshield
 cd /workspace/deepshield
 
 # Git으로 클론
-git clone https://github.com/YOUR_REPO/DeepShield.git .
+git clone https://github.com/Nasser-Lim/DeepShield.git .
 
 # 또는 로컬에서 scp로 업로드 (로컬 터미널에서 실행)
 # scp -r ./services/runpod-inference root@[POD_IP]:/workspace/deepshield/services/
@@ -104,16 +101,24 @@ VRAM           : 24.0 GB
 
 ---
 
-## Step 6 — 모델 가중치 다운로드 (Volume에 저장)
+## Step 6 — 모델 저장소 클론 (Volume에 저장)
 
-### Effort
+> Effort와 SPSL은 [SCLBD/DeepfakeBench](https://github.com/SCLBD/DeepfakeBench)에 통합되어 있습니다.  
+> Face X-ray만 별도 저장소([neverUseThisName/Face-X-Ray](https://github.com/neverUseThisName/Face-X-Ray))를 사용합니다.
+
+### DeepfakeBench (Effort + SPSL)
 
 ```bash
-cd /volume/weights/effort/repo && git clone https://github.com/HighwayWu/EFFORT.git .
+cd /volume/weights && git clone https://github.com/SCLBD/DeepfakeBench.git deepfakebench
 
-pip install huggingface_hub && python3 -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='HighwayWu/EFFORT', filename='effort.pth', local_dir='/volume/weights/effort/')"
+ls /volume/weights/deepfakebench/training/detectors/ | grep -E "effort|spsl"
+```
 
-ls -lh /volume/weights/effort/
+DeepfakeBench의 사전학습 가중치는 저장소 README의 Google Drive 링크에서 다운로드합니다:
+
+```bash
+# README에서 가중치 링크 확인
+cat /volume/weights/deepfakebench/README.md | grep -A5 -i "pretrained\|weight\|checkpoint"
 ```
 
 ### Face X-ray
@@ -121,22 +126,10 @@ ls -lh /volume/weights/effort/
 ```bash
 cd /volume/weights/xray/repo && git clone https://github.com/neverUseThisName/Face-X-Ray.git .
 
-wget -O /volume/weights/xray/xray.pth "https://저자_배포_링크/xray.pth"
-
-ls -lh /volume/weights/xray/
+ls /volume/weights/xray/repo/
 ```
 
-### SPSL
-
-```bash
-cd /volume/weights/spsl/repo && git clone https://github.com/SCLBD/DeepfakeBench.git .
-
-wget -O /volume/weights/spsl/spsl.pth "https://저자_배포_링크/spsl.pth"
-
-ls -lh /volume/weights/spsl/
-```
-
-### 전체 가중치 확인
+### 전체 확인
 
 ```bash
 find /volume/weights -name "*.pth" -o -name "*.pt" -o -name "*.ckpt" | sort
@@ -165,11 +158,11 @@ class EffortDetector(DetectorBase):
     name = "effort"
 
     def load(self, device: str) -> None:
-        sys.path.insert(0, "/volume/weights/effort/repo")
-        from model import EffortNet          # 저자 실제 클래스명으로 교체
-        self.model = EffortNet()
-        ckpt = torch.load("/volume/weights/effort/effort.pth", map_location=device)
-        self.model.load_state_dict(ckpt)
+        sys.path.insert(0, "/volume/weights/deepfakebench")
+        from training.detectors.effort_detector import EffortDetector as Net
+        self.model = Net()
+        ckpt = torch.load("/volume/weights/deepfakebench/pretrained/effort.pth", map_location=device)
+        self.model.load_state_dict(ckpt, strict=False)
         self.model.to(device).eval()
         self.device = device
 
@@ -204,10 +197,11 @@ class FaceXrayDetector(DetectorBase):
 
     def load(self, device: str) -> None:
         sys.path.insert(0, "/volume/weights/xray/repo")
-        from model import XrayNet            # 저자 실제 클래스명으로 교체
-        self.model = XrayNet()
-        ckpt = torch.load("/volume/weights/xray/xray.pth", map_location=device)
-        self.model.load_state_dict(ckpt)
+        # Face-X-Ray 저장소의 실제 클래스명을 README에서 확인 후 교체
+        from model import BiSeNet as Net
+        self.model = Net(n_classes=2)
+        ckpt = torch.load("/volume/weights/xray/repo/pretrained/xray.pth", map_location=device)
+        self.model.load_state_dict(ckpt, strict=False)
         self.model.to(device).eval()
         self.device = device
 
@@ -242,11 +236,11 @@ class SPSLDetector(DetectorBase):
     name = "spsl"
 
     def load(self, device: str) -> None:
-        sys.path.insert(0, "/volume/weights/spsl/repo")
-        from training.detectors.spsl_detector import SPSLDetector as Net  # 실제 경로 확인
+        sys.path.insert(0, "/volume/weights/deepfakebench")
+        from training.detectors.spsl_detector import SPSLDetector as Net
         self.model = Net()
-        ckpt = torch.load("/volume/weights/spsl/spsl.pth", map_location=device)
-        self.model.load_state_dict(ckpt)
+        ckpt = torch.load("/volume/weights/deepfakebench/pretrained/spsl.pth", map_location=device)
+        self.model.load_state_dict(ckpt, strict=False)
         self.model.to(device).eval()
         self.device = device
 
@@ -325,7 +319,7 @@ RUNPOD_INFERENCE_URL=https://[POD_ID]-8000.proxy.runpod.net
 ## Pod 재시작 시 복구 절차
 
 Container Disk(`/workspace`)는 재시작 시 초기화됩니다.  
-Volume(`/volume/weights`)은 보존되므로 아래만 재실행합니다.
+Volume(`/volume/weights`)은 보존되므로 저장소 클론·가중치 다운로드는 생략하고 아래만 재실행합니다.
 
 ```bash
 cd /workspace && git clone https://github.com/YOUR_REPO/DeepShield.git deepshield
