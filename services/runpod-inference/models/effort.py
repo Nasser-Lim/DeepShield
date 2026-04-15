@@ -62,25 +62,31 @@ class EffortDetector(DetectorBase):
                 sd = ckpt
 
             # SBI checkpoint uses old timm naming (e.g. "net._conv_stem.weight").
-            # Modern timm uses "net.conv_stem.weight" — strip the underscore
-            # prefix from internal module names so keys align.
+            # Modern timm uses "net.conv_stem.weight".
             def _rename(k: str) -> str:
-                # net._conv_stem.weight    → net.conv_stem.weight
-                # net._bn0.weight          → net.bn1.weight  (renamed in timm 0.6+)
-                # net._blocks.X.Y          → net.blocks.X.Y
-                # net._conv_head, _bn1     → net.conv_head, net.bn2
-                # net._fc                  → net.classifier
-                if k.startswith("net._"):
-                    rest = k[len("net._"):]
-                    # Special-case the renamed top-level layers
-                    if rest.startswith("bn0."):
-                        rest = "bn1." + rest[len("bn0."):]
-                    elif rest.startswith("bn1."):
-                        rest = "bn2." + rest[len("bn1."):]
-                    elif rest.startswith("fc."):
-                        rest = "classifier." + rest[len("fc."):]
-                    return "net." + rest
-                return k
+                if k.startswith("net."):
+                    k = k[4:]
+                
+                # Top level layers
+                if k.startswith("_conv_stem"): k = k.replace("_conv_stem", "conv_stem")
+                elif k.startswith("_bn0"): k = k.replace("_bn0", "bn1")
+                elif k.startswith("_conv_head"): k = k.replace("_conv_head", "conv_head")
+                elif k.startswith("_bn1"): k = k.replace("_bn1", "bn2")
+                elif k.startswith("_fc"): k = k.replace("_fc", "classifier")
+                
+                # Blocks
+                if k.startswith("_blocks"):
+                    k = k.replace("_blocks", "blocks")
+                    k = k.replace("._expand_conv", ".conv_pw")
+                    k = k.replace("._bn0", ".bn1")
+                    k = k.replace("._depthwise_conv", ".conv_dw")
+                    k = k.replace("._bn1", ".bn2")
+                    k = k.replace("._se_reduce", ".se.conv_reduce")
+                    k = k.replace("._se_expand", ".se.conv_expand")
+                    k = k.replace("._project_conv", ".conv_pwl")
+                    k = k.replace("._bn2", ".bn3")
+                    
+                return "net." + k
 
             sd = {_rename(k): v for k, v in sd.items()}
             missing, unexpected = net.load_state_dict(sd, strict=False)
