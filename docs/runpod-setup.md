@@ -73,9 +73,56 @@ python3 -m venv /workspace/venv --system-site-packages && source /workspace/venv
 
 ### Step 3 — 가중치 파일 업로드
 
-RunPod 웹터미널 좌측 파일 브라우저에서 `/workspace/weights/` 폴더를 만들고 로컬 PC의 가중치 3개를 업로드합니다.
+로컬에 다운로드된 파일을 `/workspace/weights/` 에 업로드합니다.
 
-업로드 확인:
+| 로컬 파일명 | RunPod 저장 경로 | 크기 |
+|---|---|---|
+| `FFraw.tar` | `/workspace/weights/sbi_best.pth` | ~135MB |
+| `fatformer_4class_ckpt.pth` | `/workspace/weights/fatformer_best.pth` | ~1.9GB |
+| `C2P_CLIP-GenImage_release_20250224.pth` | `/workspace/weights/c2pclip_best.pth` | ~1.2GB |
+
+> `FFraw.tar`은 확장자가 .tar이지만 실제로는 PyTorch zip 포맷입니다. 내용 변경 없이 파일명만 `sbi_best.pth`로 바꿔서 업로드하면 됩니다.
+
+#### 방법 A — RunPod 웹터미널 파일 브라우저 (권장, 소용량)
+
+1. Pod → **Connect** → **Start Web Terminal** 클릭
+2. 터미널 왼쪽 파일 브라우저에서 `/workspace/weights/` 폴더 생성
+3. 폴더 클릭 → **Upload** 버튼으로 파일 3개를 위 이름으로 업로드
+
+#### 방법 B — `runpodctl` CLI (대용량, 빠름)
+
+로컬 PC PowerShell에서:
+
+```powershell
+# runpodctl 설치 (최초 1회)
+winget install runpod.runpodctl
+
+# API 키 설정 (RunPod 대시보드 → Settings → API Keys)
+runpodctl config --apiKey YOUR_API_KEY
+
+# 파일 전송 (POD_ID는 RunPod 대시보드에서 확인)
+runpodctl send "C:\Users\user\Downloads\FFraw.tar"
+runpodctl send "C:\Users\user\Downloads\fatformer_4class_ckpt.pth"
+runpodctl send "C:\Users\user\Downloads\C2P_CLIP-GenImage_release_20250224.pth"
+```
+
+RunPod 웹터미널에서 수신 (각 파일마다 실행):
+
+```
+mkdir -p /workspace/weights && runpodctl receive [CODE] && mv FFraw.tar /workspace/weights/sbi_best.pth
+```
+
+```
+runpodctl receive [CODE] && mv fatformer_4class_ckpt.pth /workspace/weights/fatformer_best.pth
+```
+
+```
+runpodctl receive [CODE] && mv C2P_CLIP-GenImage_release_20250224.pth /workspace/weights/c2pclip_best.pth
+```
+
+> `send` 명령 실행 시 출력되는 `[CODE]`를 `receive` 명령에 붙여넣습니다.
+
+#### 업로드 확인
 
 ```
 ls -lh /workspace/weights/
@@ -83,9 +130,9 @@ ls -lh /workspace/weights/
 
 예상 출력:
 ```
--rw-r--r-- 1 root root  70M sbi_best.pth
--rw-r--r-- 1 root root 1.2G fatformer_best.pth
--rw-r--r-- 1 root root 1.1G c2pclip_best.pth
+-rw-r--r-- 1 root root 135M sbi_best.pth
+-rw-r--r-- 1 root root 1.9G fatformer_best.pth
+-rw-r--r-- 1 root root 1.2G c2pclip_best.pth
 ```
 
 ---
