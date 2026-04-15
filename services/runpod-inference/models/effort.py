@@ -92,14 +92,21 @@ class EffortDetector(DetectorBase):
                                 stage += 1
                                 
                             suffix = ".".join(parts[2:])
-                            suffix = suffix.replace("_expand_conv", "conv_pw")
-                            suffix = suffix.replace("_bn0", "bn1")
                             suffix = suffix.replace("_depthwise_conv", "conv_dw")
-                            suffix = suffix.replace("_bn1", "bn2")
                             suffix = suffix.replace("_se_reduce", "se.conv_reduce")
                             suffix = suffix.replace("_se_expand", "se.conv_expand")
-                            suffix = suffix.replace("_project_conv", "conv_pwl")
-                            suffix = suffix.replace("_bn2", "bn3")
+                            
+                            if stage == 0:
+                                # No expansion phase in stage 0
+                                suffix = suffix.replace("_bn1", "bn1")
+                                suffix = suffix.replace("_project_conv", "conv_pw")
+                                suffix = suffix.replace("_bn2", "bn2")
+                            else:
+                                suffix = suffix.replace("_expand_conv", "conv_pw")
+                                suffix = suffix.replace("_bn0", "bn1")
+                                suffix = suffix.replace("_bn1", "bn2")
+                                suffix = suffix.replace("_project_conv", "conv_pwl")
+                                suffix = suffix.replace("_bn2", "bn3")
                             
                             k = f"blocks.{stage}.{block}.{suffix}"
                         except ValueError:
