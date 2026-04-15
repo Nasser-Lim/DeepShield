@@ -8,24 +8,24 @@ type TabKey = "effort" | "xray" | "spsl";
 const TABS: { key: TabKey; label: string; weight: string; blurb: string; detail: string }[] = [
   {
     key: "effort",
-    label: "Xception",
-    weight: "50%",
-    blurb: "CNN 텍스처 아티팩트 탐지",
-    detail: "딥러닝 생성 이미지에서 나타나는 픽셀 수준의 텍스처 불일치를 Xception 아키텍처로 분류합니다. GAN·Diffusion 모델의 고주파 아티팩트에 민감합니다.",
+    label: "SBI",
+    weight: "40%",
+    blurb: "자가 혼합 이미지 합성 흔적 탐지",
+    detail: "EfficientNet-B4 기반. 얼굴 합성 시 발생하는 블렌딩 경계 아티팩트를 학습합니다. GAN·Diffusion 모두에서 나타나는 합성 흔적에 민감하며 실사 사진 오탐률이 낮습니다. (CVPR 2022)",
   },
   {
     key: "xray",
-    label: "F3Net",
-    weight: "20%",
-    blurb: "주파수 분해 합성 경계 탐지",
-    detail: "FAD(주파수 인식 분해) 헤드가 DCT 4개 대역으로 이미지를 분해한 뒤 Xception이 각 대역의 이상 패턴을 학습합니다. 얼굴 합성 경계선의 주파수 불연속성에 강합니다.",
+    label: "FatFormer",
+    weight: "40%",
+    blurb: "CLIP 기반 위조 적응형 트랜스포머",
+    detail: "CLIP ViT-L/14 백본에 위조 인식 어댑터를 추가했습니다. 주파수 도메인 분석과 언어-이미지 정렬을 결합해 학습하지 않은 생성 모델에도 높은 일반화 성능을 보입니다. (CVPR 2024)",
   },
   {
     key: "spsl",
-    label: "SPSL",
-    weight: "30%",
-    blurb: "위상 스펙트럼 얕은 학습",
-    detail: "RGB에 FFT 위상 스펙트럼 채널을 추가한 4채널 입력으로 Xception을 훈련합니다. 생성 모델이 공간 도메인에서 숨기기 어려운 위상 불일치를 직접 포착합니다.",
+    label: "C2P-CLIP",
+    weight: "20%",
+    blurb: "카테고리 공통 프롬프트 CLIP 탐지",
+    detail: "CLIP ViT-L/14에 카테고리 공통 프롬프트(C2P)를 주입해 실제·딥페이크 텍스트 임베딩과의 유사도로 판별합니다. 실사 사진에 대한 오탐률이 매우 낮습니다. (AAAI 2025)",
   },
 ];
 

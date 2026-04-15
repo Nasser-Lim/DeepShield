@@ -10,24 +10,25 @@ import numpy as np
 from .base import DetectorBase, DetectorOutput
 
 # ---------------------------------------------------------------------------
-# Xception detector — pure PyTorch reimplementation matching DeepfakeBench's
-# checkpoint key layout. Loads weights only, no DeepfakeBench code dependency.
-# Weights: https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.1/xception_best.pth
+# SBI detector — Self-Blended Images (CVPR 2022, Shiohara & Yamasaki)
+# Architecture: EfficientNet-B4 (timm) → sigmoid binary head
+# Weights: https://github.com/mapooon/SelfBlendedImages (FFraw.pth ~70MB)
 # ---------------------------------------------------------------------------
 
 WEIGHTS_PATH = os.environ.get(
-    "XCEPTION_WEIGHTS",
-    "/workspace/weights/xception_best.pth",
+    "SBI_WEIGHTS",
+    "/workspace/weights/sbi_best.pth",
 )
 
 log = logging.getLogger("inference")
 
 
 class EffortDetector(DetectorBase):
-    """Xception detector (slot 'effort', weight 0.40).
+    """SBI detector (slot 'effort', weight 0.40).
 
-    DeepfakeBench checkpoint uses 2-class softmax head (real=0, fake=1).
-    We return softmax probability of the 'fake' class.
+    EfficientNet-B4 trained on self-blended synthetic faces. Detects
+    blending artifacts that are present in most face-swap methods and
+    many diffusion-generated faces.
     """
 
     name = "effort"
@@ -38,21 +39,36 @@ class EffortDetector(DetectorBase):
 
         try:
             import torch
-            from ._xception import DetectorNet
+            import torch.nn as nn
+            import timm
 
-            net = DetectorNet(in_channels=3, num_classes=2, head_type="linear")
+            class _SBINet(nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    # EfficientNet-B4 with single binary output
+                    self.backbone = timm.create_model(
+                        "efficientnet_b4", pretrained=False, num_classes=1
+                    )
+
+                def forward(self, x: torch.Tensor) -> torch.Tensor:
+                    return self.backbone(x)  # (B, 1) logit
+
+            net = _SBINet()
             ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=True)
-            sd = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
+            # SBI checkpoints may use "state_dict", "model", or be a raw state_dict
+            if isinstance(ckpt, dict):
+                sd = ckpt.get("state_dict", ckpt.get("model", ckpt))
+            else:
+                sd = ckpt
             missing, unexpected = net.load_state_dict(sd, strict=False)
-            log.info("Xception: missing=%d unexpected=%d", len(missing), len(unexpected))
+            log.info("SBI: missing=%d unexpected=%d", len(missing), len(unexpected))
             if missing:
-                log.warning("Xception missing keys (first 5): %s", missing[:5])
-            if unexpected:
-                log.warning("Xception unexpected keys (first 5): %s", unexpected[:5])
+                log.warning("SBI missing keys (first 5): %s", missing[:5])
             self.model = net.to(device).eval()
             self._use_placeholder = False
+            log.info("SBI: loaded ok")
         except Exception as e:
-            log.warning("Xception load failed (%s) — using placeholder", e)
+            log.warning("SBI load failed (%s) — using placeholder", e)
 
     def predict(self, face_bgr: np.ndarray) -> DetectorOutput:
         if self._use_placeholder:
@@ -64,15 +80,19 @@ class EffortDetector(DetectorBase):
 
         import torch
         from torchvision import transforms
+
+        # SBI uses ImageNet normalization, 380x380 input
         tf = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize((256, 256)),
+            transforms.Resize((380, 380)),
             transforms.ToTensor(),
-            transforms.Normalize([0.5] * 3, [0.5] * 3),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            ),
         ])
         x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            logits = self.model(x)
-            probs = torch.softmax(logits, dim=1)
-            score = float(probs[0, 1].item())  # fake class probability
+            logit = self.model(x)          # (1, 1)
+            score = float(torch.sigmoid(logit)[0, 0].item())
         return DetectorOutput(score=score, heatmap=None)

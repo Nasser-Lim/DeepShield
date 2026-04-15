@@ -15,16 +15,16 @@ class Settings(BaseSettings):
     runpod_inference_timeout: float = 60.0
 
     # Ensemble weights (must sum to 1.0)
-    # F3Net (xray) has systematic upward bias on real photos → lower its weight.
-    # Xception (effort) is most reliable; SPSL complements phase artifacts.
-    weight_effort: float = 0.50
-    weight_xray: float = 0.20
-    weight_spsl: float = 0.30
+    # effort = SBI (CVPR 2022)    — blending artifact detector
+    # xray   = FatFormer (CVPR 2024) — CLIP-based forgery-aware transformer
+    # spsl   = C2P-CLIP (AAAI 2025)  — category prompt CLIP, low false-positive
+    weight_effort: float = 0.40
+    weight_xray: float = 0.40
+    weight_spsl: float = 0.20
 
     # Verdict thresholds
-    # Raised to compensate for F3Net's positive bias on real-camera images.
-    threshold_safe: float = 0.35
-    threshold_risk: float = 0.75
+    threshold_safe: float = 0.30
+    threshold_risk: float = 0.70
 
 
 @lru_cache
