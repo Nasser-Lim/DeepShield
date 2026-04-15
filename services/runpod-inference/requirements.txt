@@ -9,8 +9,10 @@ python-multipart==0.0.12
 timm==1.0.9
 mtcnn==0.1.1
 # SBI uses timm (efficientnet_b4) — already listed above
-# FatFormer + C2P-CLIP use open_clip and pytorch_wavelets:
+# FatFormer uses open_clip_torch + pytorch_wavelets:
 #   pip install open_clip_torch pytorch_wavelets
+# C2P-CLIP uses HuggingFace transformers (CLIPModel):
+#   pip install transformers accelerate
 # PyTorch is provided by the RunPod base image; install separately for local dev:
 #   pip install torch==2.4.1 torchvision==0.19.1
 # mtcnn requires tensorflow; on RunPod use tensorflow-cpu:

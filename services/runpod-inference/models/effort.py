@@ -12,7 +12,11 @@ from .base import DetectorBase, DetectorOutput
 # ---------------------------------------------------------------------------
 # SBI detector — Self-Blended Images (CVPR 2022, Shiohara & Yamasaki)
 # Architecture: EfficientNet-B4 (timm) → sigmoid binary head
-# Weights: https://github.com/mapooon/SelfBlendedImages (FFraw.pth ~70MB)
+# Weights: https://github.com/mapooon/SelfBlendedImages (FFraw.pth ~135MB)
+#
+# Probe result: 706 keys, prefix "net.*"
+# The SBI repo wraps EfficientNet-B4 as self.net (not self.backbone).
+# We mirror that naming so state_dict loads with strict=True.
 # ---------------------------------------------------------------------------
 
 WEIGHTS_PATH = os.environ.get(
@@ -27,8 +31,8 @@ class EffortDetector(DetectorBase):
     """SBI detector (slot 'effort', weight 0.40).
 
     EfficientNet-B4 trained on self-blended synthetic faces. Detects
-    blending artifacts that are present in most face-swap methods and
-    many diffusion-generated faces.
+    blending artifacts present in most face-swap methods and many
+    diffusion-generated faces.
     """
 
     name = "effort"
@@ -45,17 +49,16 @@ class EffortDetector(DetectorBase):
             class _SBINet(nn.Module):
                 def __init__(self):
                     super().__init__()
-                    # EfficientNet-B4 with single binary output
-                    self.backbone = timm.create_model(
+                    # SBI repo uses attribute name "net" — must match checkpoint keys
+                    self.net = timm.create_model(
                         "efficientnet_b4", pretrained=False, num_classes=1
                     )
 
                 def forward(self, x: torch.Tensor) -> torch.Tensor:
-                    return self.backbone(x)  # (B, 1) logit
+                    return self.net(x)  # (B, 1) logit
 
             net = _SBINet()
-            ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=True)
-            # SBI checkpoints may use "state_dict", "model", or be a raw state_dict
+            ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=False)
             if isinstance(ckpt, dict):
                 sd = ckpt.get("state_dict", ckpt.get("model", ckpt))
             else:
@@ -81,7 +84,7 @@ class EffortDetector(DetectorBase):
         import torch
         from torchvision import transforms
 
-        # SBI uses ImageNet normalization, 380x380 input
+        # SBI: ImageNet normalization, 380×380
         tf = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((380, 380)),

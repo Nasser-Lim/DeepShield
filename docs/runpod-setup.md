@@ -64,7 +64,7 @@ apt-get update && apt-get install -y git wget libgl1 libglib2.0-0 && cd /workspa
 ### Step 2 — Python venv 생성 및 패키지 설치
 
 ```
-python3 -m venv /workspace/venv --system-site-packages && source /workspace/venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/deepshield/services/runpod-inference/requirements.txt && pip install mtcnn tensorflow-cpu open_clip_torch pytorch_wavelets
+python3 -m venv /workspace/venv --system-site-packages && source /workspace/venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/deepshield/services/runpod-inference/requirements.txt && pip install mtcnn tensorflow-cpu open_clip_torch pytorch_wavelets transformers accelerate
 ```
 
 > `--system-site-packages` 옵션으로 base image의 torch/torchvision/cuda를 그대로 사용합니다.
@@ -108,7 +108,7 @@ Invoke-WebRequest -Uri "https://github.com/runpod/runpodctl/releases/latest/down
 로컬 PowerShell (파일마다 순서대로 실행):
 
 ```powershell
-~\runpodctl.exe send "C:\Users\user\Downloads\FFraw.tar"
+~\runpodctl.exe send "C:\Users\user\Downloads\sbi_best.pth"
 ```
 ```powershell
 ~\runpodctl.exe send "C:\Users\user\Downloads\fatformer_4class_ckpt.pth"
@@ -199,7 +199,7 @@ RUNPOD_INFERENCE_URL=https://[POD_ID]-8000.proxy.runpod.net
 `/workspace/`는 Volume이라 코드·가중치·venv 모두 보존됩니다.
 
 ```
-cd /workspace/deepshield && git pull && source /workspace/venv/bin/activate && mkdir -p /tmp/deepshield/uploads && cd services/runpod-inference && DEVICE=cuda UPLOAD_DIR=/tmp/deepshield/uploads python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
+cd /workspace/deepshield && git pull && source /workspace/venv/bin/activate && pip install --quiet transformers accelerate open_clip_torch pytorch_wavelets && mkdir -p /tmp/deepshield/uploads && cd services/runpod-inference && DEVICE=cuda UPLOAD_DIR=/tmp/deepshield/uploads python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 ---

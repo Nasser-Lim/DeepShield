@@ -11,13 +11,14 @@ from .base import DetectorBase, DetectorOutput
 
 # ---------------------------------------------------------------------------
 # C2P-CLIP detector — Category-to-Prompt CLIP (AAAI 2025, Tan et al.)
-# Architecture: CLIP ViT-L/14 image encoder + learned Category Common Prompts
-# Real/fake scored via cosine similarity to learned text embeddings.
-# Weights: https://github.com/chuangchuangtan/C2P-CLIP-DeepfakeDetection
+# Architecture: HuggingFace CLIPModel (ViT-L/14) + classification head
+# Weights: https://github.com/chuangchuangtan/C2P-CLIP-DeepfakeDetection (~1.2GB)
 #
-# NOTE: Weight key structure confirmed after probe. Checkpoint typically
-# contains: "image_encoder.*" (CLIP visual), "text_encoder.*" (CLIP text),
-# "prefix_encoder.*" (learned C2P prefix tokens).
+# Probe result (394 keys), prefix "model.vision_model.*":
+#   model.vision_model.embeddings.*, model.vision_model.encoder.layers.*,
+#   model.vision_model.post_layernorm.*,  model.visual_projection.*
+# This is the HuggingFace transformers.CLIPModel layout.
+# The classifier head is likely stored as "classifier.*" or "fc.*" at top level.
 # ---------------------------------------------------------------------------
 
 WEIGHTS_PATH = os.environ.get(
@@ -27,7 +28,6 @@ WEIGHTS_PATH = os.environ.get(
 
 log = logging.getLogger("inference")
 
-# CLIP normalization constants (ViT-L/14)
 _CLIP_MEAN = [0.48145466, 0.4578275, 0.40821073]
 _CLIP_STD  = [0.26862954, 0.26130258, 0.27577711]
 
@@ -35,9 +35,8 @@ _CLIP_STD  = [0.26862954, 0.26130258, 0.27577711]
 class SPSLDetector(DetectorBase):
     """C2P-CLIP detector (slot 'spsl', weight 0.20).
 
-    CLIP ViT-L/14 with Category Common Prompts injected into the text encoder.
-    Real vs. fake scored by cosine similarity between the image embedding and
-    learned real/fake text embeddings. Low false-positive rate on real photos.
+    HuggingFace CLIPModel (ViT-L/14) fine-tuned with Category Common Prompts.
+    Low false-positive rate on real photos.
     """
 
     name = "spsl"
@@ -49,83 +48,49 @@ class SPSLDetector(DetectorBase):
         try:
             import torch
             import torch.nn as nn
-            import open_clip
+            from transformers import CLIPModel
 
             # ------------------------------------------------------------------
-            # C2P-CLIP architecture:
-            #   - CLIP ViT-L/14 image encoder (frozen or fine-tuned)
-            #   - Learned prefix tokens (C2P) prepended to text encoder input
-            #   - Two text embeddings: "a photo of real face" vs "a deepfake face"
-            #     enhanced by the learned prefix
-            #   - Score = cosine_similarity(img_emb, fake_text_emb)
-            #
-            # Minimal implementation that handles most checkpoint layouts.
-            # Actual prefix length and text template confirmed via probe.
+            # C2P-CLIP stores weights under "model.*" (HuggingFace CLIPModel).
+            # We mirror that attribute name so keys align.
+            # The classification head (binary: real vs fake) sits outside "model.*"
+            # and is loaded via strict=False.
             # ------------------------------------------------------------------
 
             class _C2PCLIP(nn.Module):
-                def __init__(self, prefix_len: int = 8):
+                def __init__(self):
                     super().__init__()
-                    clip_model, _, _ = open_clip.create_model_and_transforms(
-                        "ViT-L-14", pretrained=None
+                    # Mirror checkpoint attribute name "model"
+                    self.model = CLIPModel.from_pretrained(
+                        "openai/clip-vit-large-patch14",
+                        ignore_mismatched_sizes=True,
                     )
-                    self.visual = clip_model.visual
-                    self.text_encoder = clip_model.transformer
-                    self.token_embedding = clip_model.token_embedding
-                    self.positional_embedding = clip_model.positional_embedding
-                    self.ln_final = clip_model.ln_final
-                    self.text_projection = clip_model.text_projection
-                    feat_dim = 768
+                    # Binary head (real=0, fake=1)
+                    # CLIPModel.get_image_features() output dim = 768
+                    self.classifier = nn.Linear(768, 2)
 
-                    # Learnable C2P prefix tokens for real and fake categories
-                    self.prefix_real = nn.Parameter(torch.zeros(prefix_len, feat_dim))
-                    self.prefix_fake = nn.Parameter(torch.zeros(prefix_len, feat_dim))
-
-                    # Logit scale (CLIP-style)
-                    self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
-
-                def forward(self, x: torch.Tensor) -> torch.Tensor:
-                    # Image embedding
-                    img_emb = self.visual(x)   # (B, 768)
-                    img_emb = img_emb / img_emb.norm(dim=-1, keepdim=True)
-                    return img_emb  # caller handles text similarity
+                def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+                    feats = self.model.get_image_features(pixel_values=pixel_values)
+                    feats = feats / feats.norm(dim=-1, keepdim=True)
+                    return self.classifier(feats)   # (B, 2) logits
 
             net = _C2PCLIP()
             ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=False)
             if isinstance(ckpt, dict):
-                sd = ckpt.get("state_dict", ckpt.get("model", ckpt))
+                sd = ckpt.get("state_dict", ckpt.get("model_state_dict", ckpt))
             else:
                 sd = ckpt
             missing, unexpected = net.load_state_dict(sd, strict=False)
-            log.info("C2P-CLIP: missing=%d unexpected=%d", len(missing), len(unexpected))
+            log.info(
+                "C2P-CLIP: missing=%d unexpected=%d", len(missing), len(unexpected)
+            )
             if missing:
                 log.warning("C2P-CLIP missing keys (first 5): %s", missing[:5])
             self.model = net.to(device).eval()
-
-            # Pre-compute fake text embedding for inference
-            self._fake_emb = self._compute_text_emb("a deepfake face image", device)
-            self._real_emb = self._compute_text_emb("a real photo of a face", device)
-
             self._use_placeholder = False
             log.info("C2P-CLIP: loaded ok")
         except Exception as e:
             log.warning("C2P-CLIP load failed (%s) — using placeholder", e)
-
-    def _compute_text_emb(self, text: str, device: str):
-        """Compute a fixed CLIP text embedding for a given prompt."""
-        import torch
-        import open_clip
-        tokenizer = open_clip.get_tokenizer("ViT-L-14")
-        tokens = tokenizer([text]).to(device)
-        with torch.no_grad():
-            # Use a fresh CLIP model just for text encoding (small overhead at load time)
-            clip_model, _, _ = open_clip.create_model_and_transforms(
-                "ViT-L-14", pretrained=None
-            )
-            clip_model = clip_model.to(device).eval()
-            emb = clip_model.encode_text(tokens)
-            emb = emb / emb.norm(dim=-1, keepdim=True)
-        return emb  # (1, 768)
 
     def predict(self, face_bgr: np.ndarray) -> DetectorOutput:
         if self._use_placeholder:
@@ -140,6 +105,7 @@ class SPSLDetector(DetectorBase):
         import torch
         from torchvision import transforms
 
+        # C2P-CLIP: CLIP input spec 224×224 with CLIP normalization
         tf = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((224, 224)),
@@ -148,11 +114,7 @@ class SPSLDetector(DetectorBase):
         ])
         x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            img_emb = self.model(x)   # (1, 768) normalised
-            # Cosine similarity to fake/real text embeddings
-            sim_fake = (img_emb * self._fake_emb).sum(dim=-1)  # (1,)
-            sim_real = (img_emb * self._real_emb).sum(dim=-1)  # (1,)
-            # Convert to fake probability via softmax over [real, fake]
-            logits = torch.stack([sim_real, sim_fake], dim=-1)  # (1, 2)
-            score = float(torch.softmax(logits, dim=-1)[0, 1].item())
+            logits = self.model(x)                  # (1, 2)
+            probs = torch.softmax(logits, dim=1)
+            score = float(probs[0, 1].item())       # fake class
         return DetectorOutput(score=score, heatmap=None)

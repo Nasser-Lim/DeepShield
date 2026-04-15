@@ -11,12 +11,17 @@ from .base import DetectorBase, DetectorOutput
 
 # ---------------------------------------------------------------------------
 # FatFormer detector — Forgery-aware Adaptive Transformer (CVPR 2024, Liu et al.)
-# Architecture: CLIP ViT-L/14 + Forgery-aware adapters + Language-guided alignment
-# Weights: https://github.com/Michel-liu/FatFormer (fatformer_4class_ckpt.pth ~1.2GB)
+# Architecture: CLIP ViT-L/14 (full) + Forgery-aware adapters + 2-class head
+# Weights: https://github.com/Michel-liu/FatFormer (~1.9GB)
 #
-# NOTE: Weight key structure will be confirmed via probe script after weights
-# are received. The load() method uses strict=False and logs missing/unexpected
-# keys so the mapping can be adjusted once keys are known.
+# Probe result (1116 keys), prefix "clip_model.*":
+#   clip_model.positional_embedding, clip_model.text_projection,
+#   clip_model.logit_scale, clip_model.visual.*, clip_model.transformer.*,
+#   clip_model.token_embedding.*, clip_model.ln_final.*
+# The checkpoint stores the FULL open_clip model as self.clip_model,
+# plus additional adapter/head layers at the top level.
+# Strategy: hold clip_model as a submodule, load with strict=False.
+# Binary head keys are inferred from the unexpected keys after first load.
 # ---------------------------------------------------------------------------
 
 WEIGHTS_PATH = os.environ.get(
@@ -26,7 +31,6 @@ WEIGHTS_PATH = os.environ.get(
 
 log = logging.getLogger("inference")
 
-# CLIP normalization constants (ViT-L/14)
 _CLIP_MEAN = [0.48145466, 0.4578275, 0.40821073]
 _CLIP_STD  = [0.26862954, 0.26130258, 0.27577711]
 
@@ -50,35 +54,27 @@ class FaceXrayDetector(DetectorBase):
             import open_clip
 
             # ------------------------------------------------------------------
-            # FatFormer wraps CLIP ViT-L/14 with lightweight adapter layers.
-            # The checkpoint stores the full adapted model under keys like
-            # "visual.*" (CLIP vision encoder) and "adapter.*" or "img_adapter.*"
-            # (forgery-aware adapters). Exact key names are confirmed via probe.
-            #
-            # Strategy: load CLIP ViT-L/14 via open_clip, then load the full
-            # FatFormer checkpoint with strict=False. The CLIP backbone weights
-            # in the checkpoint override the pretrained CLIP weights; adapter
-            # weights are added on top.
+            # The FatFormer checkpoint stores the full CLIP model under the
+            # attribute name "clip_model". We mirror that so keys match.
+            # Adapter and classification head keys (outside clip_model.*) are
+            # loaded with strict=False — they land in unexpected_keys if our
+            # module doesn't declare them, but the CLIP backbone loads cleanly.
             # ------------------------------------------------------------------
 
             class _FatFormer(nn.Module):
                 def __init__(self):
                     super().__init__()
-                    # CLIP ViT-L/14 visual encoder (feature dim = 768)
-                    clip_model, _, _ = open_clip.create_model_and_transforms(
+                    # Mirror the checkpoint's "clip_model" attribute name
+                    self.clip_model, _, _ = open_clip.create_model_and_transforms(
                         "ViT-L-14", pretrained=None
                     )
-                    self.visual = clip_model.visual
-                    feat_dim = 768
-
-                    # Forgery-aware adapter head (binary: real=0, fake=1)
-                    # Actual architecture confirmed after weight probe.
-                    # This minimal head handles the most common checkpoint layout.
-                    self.head = nn.Linear(feat_dim, 2)
+                    # Binary classification head (real=0, fake=1)
+                    # FatFormer uses a linear head on the visual features (dim=1024)
+                    self.head = nn.Linear(1024, 2)
 
                 def forward(self, x: torch.Tensor) -> torch.Tensor:
-                    feats = self.visual(x)   # (B, 768) after global pool
-                    return self.head(feats)  # (B, 2) logits
+                    feats = self.clip_model.encode_image(x)   # (B, 1024)
+                    return self.head(feats)                    # (B, 2) logits
 
             net = _FatFormer()
             ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=False)
@@ -87,7 +83,9 @@ class FaceXrayDetector(DetectorBase):
             else:
                 sd = ckpt
             missing, unexpected = net.load_state_dict(sd, strict=False)
-            log.info("FatFormer: missing=%d unexpected=%d", len(missing), len(unexpected))
+            log.info(
+                "FatFormer: missing=%d unexpected=%d", len(missing), len(unexpected)
+            )
             if missing:
                 log.warning("FatFormer missing keys (first 5): %s", missing[:5])
             self.model = net.to(device).eval()
@@ -108,7 +106,7 @@ class FaceXrayDetector(DetectorBase):
         import torch
         from torchvision import transforms
 
-        # FatFormer uses CLIP input spec: 224×224 with CLIP normalization
+        # FatFormer: CLIP input spec 224×224 with CLIP normalization
         tf = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((224, 224)),
@@ -117,7 +115,7 @@ class FaceXrayDetector(DetectorBase):
         ])
         x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            logits = self.model(x)                          # (1, 2)
+            logits = self.model(x)                  # (1, 2)
             probs = torch.softmax(logits, dim=1)
-            score = float(probs[0, 1].item())               # fake class
+            score = float(probs[0, 1].item())       # fake class
         return DetectorOutput(score=score, heatmap=None)
