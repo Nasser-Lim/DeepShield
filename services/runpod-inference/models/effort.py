@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
 
 import cv2
 import numpy as np
@@ -8,19 +10,24 @@ import numpy as np
 from .base import DetectorBase, DetectorOutput
 
 # ---------------------------------------------------------------------------
-# Xception detector — wrapper around DeepfakeBench's xception_detector.py
+# Xception detector — pure PyTorch reimplementation matching DeepfakeBench's
+# checkpoint key layout. Loads weights only, no DeepfakeBench code dependency.
 # Weights: https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.1/xception_best.pth
 # ---------------------------------------------------------------------------
 
-WEIGHTS_PATH = "/volume/weights/deepfakebench/training/weights/xception_best.pth"
-DEEPFAKEBENCH_ROOT = "/volume/weights/deepfakebench"
+WEIGHTS_PATH = os.environ.get(
+    "XCEPTION_WEIGHTS",
+    "/workspace/weights/xception_best.pth",
+)
+
+log = logging.getLogger("inference")
 
 
 class EffortDetector(DetectorBase):
-    """Xception-based detector (slot originally named 'effort', weight 0.40).
+    """Xception detector (slot 'effort', weight 0.40).
 
-    Placeholder is active when the weights file is absent so the pipeline
-    runs end-to-end in local dev without GPU.
+    DeepfakeBench checkpoint uses 2-class softmax head (real=0, fake=1).
+    We return softmax probability of the 'fake' class.
     """
 
     name = "effort"
@@ -30,17 +37,22 @@ class EffortDetector(DetectorBase):
         self._use_placeholder = True
 
         try:
-            import sys, torch
-            sys.path.insert(0, DEEPFAKEBENCH_ROOT)
-            from training.detectors.xception_detector import XceptionDetector
-            self.model = XceptionDetector()
-            ckpt = torch.load(WEIGHTS_PATH, map_location=device)
-            self.model.load_state_dict(ckpt, strict=False)
-            self.model.to(device).eval()
+            import torch
+            from ._xception import DetectorNet
+
+            net = DetectorNet(in_channels=3, num_classes=2, head_type="linear")
+            ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=True)
+            sd = ckpt.get("state_dict", ckpt) if isinstance(ckpt, dict) else ckpt
+            missing, unexpected = net.load_state_dict(sd, strict=False)
+            log.info("Xception: missing=%d unexpected=%d", len(missing), len(unexpected))
+            if missing:
+                log.warning("Xception missing keys (first 5): %s", missing[:5])
+            if unexpected:
+                log.warning("Xception unexpected keys (first 5): %s", unexpected[:5])
+            self.model = net.to(device).eval()
             self._use_placeholder = False
         except Exception as e:
-            import logging
-            logging.getLogger("inference").warning("Xception load failed (%s) — using placeholder", e)
+            log.warning("Xception load failed (%s) — using placeholder", e)
 
     def predict(self, face_bgr: np.ndarray) -> DetectorOutput:
         if self._use_placeholder:
@@ -54,11 +66,13 @@ class EffortDetector(DetectorBase):
         from torchvision import transforms
         tf = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize((299, 299)),
+            transforms.Resize((256, 256)),
             transforms.ToTensor(),
             transforms.Normalize([0.5] * 3, [0.5] * 3),
         ])
         x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            score = float(torch.sigmoid(self.model(x)).item())
+            logits = self.model(x)
+            probs = torch.softmax(logits, dim=1)
+            score = float(probs[0, 1].item())  # fake class probability
         return DetectorOutput(score=score, heatmap=None)

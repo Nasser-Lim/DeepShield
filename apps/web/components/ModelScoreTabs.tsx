@@ -6,9 +6,9 @@ import type { InferResponse, ModelScore } from "@/lib/api";
 type TabKey = "effort" | "xray" | "spsl";
 
 const TABS: { key: TabKey; label: string; blurb: string }[] = [
-  { key: "effort", label: "Effort",      blurb: "생성 모델 고유 지문 분석" },
-  { key: "xray",   label: "Face X-ray",  blurb: "이미지 합성 경계선 분석" },
-  { key: "spsl",   label: "SPSL",        blurb: "주파수 위상 스펙트럼 분석" },
+  { key: "effort", label: "Xception",  blurb: "생성 모델 고유 지문 분석" },
+  { key: "xray",   label: "F3Net",     blurb: "이미지 합성 경계선 분석" },
+  { key: "spsl",   label: "SPSL",      blurb: "주파수 위상 스펙트럼 분석" },
 ];
 
 export function ModelScoreTabs({ scores }: { scores: InferResponse }) {
