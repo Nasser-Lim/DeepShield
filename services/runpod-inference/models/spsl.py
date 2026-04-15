@@ -11,14 +11,16 @@ from .base import DetectorBase, DetectorOutput
 
 # ---------------------------------------------------------------------------
 # C2P-CLIP detector — Category-to-Prompt CLIP (AAAI 2025, Tan et al.)
-# Architecture: HuggingFace CLIPModel (ViT-L/14) + classification head
+# Architecture: HuggingFace CLIPModel vision encoder + Linear classifier
 # Weights: https://github.com/chuangchuangtan/C2P-CLIP-DeepfakeDetection (~1.2GB)
 #
-# Probe result (394 keys), prefix "model.vision_model.*":
-#   model.vision_model.embeddings.*, model.vision_model.encoder.layers.*,
-#   model.vision_model.post_layernorm.*,  model.visual_projection.*
-# This is the HuggingFace transformers.CLIPModel layout.
-# The classifier head is likely stored as "classifier.*" or "fc.*" at top level.
+# Probe result (394 keys):
+#   model.vision_model.*       — HuggingFace CLIPModel vision encoder
+#   model.visual_projection.*  — 768→768 projection (CLIPModel built-in)
+#   model.fc.weight / bias     — binary classification head (Linear, 2-class)
+#
+# The checkpoint uses attribute name "model" (HuggingFace CLIPModel) with
+# an extra "fc" head attached to it. We mirror this exactly.
 # ---------------------------------------------------------------------------
 
 WEIGHTS_PATH = os.environ.get(
@@ -33,11 +35,7 @@ _CLIP_STD  = [0.26862954, 0.26130258, 0.27577711]
 
 
 class SPSLDetector(DetectorBase):
-    """C2P-CLIP detector (slot 'spsl', weight 0.20).
-
-    HuggingFace CLIPModel (ViT-L/14) fine-tuned with Category Common Prompts.
-    Low false-positive rate on real photos.
-    """
+    """C2P-CLIP detector (slot 'spsl', weight 0.20)."""
 
     name = "spsl"
 
@@ -51,10 +49,14 @@ class SPSLDetector(DetectorBase):
             from transformers import CLIPModel
 
             # ------------------------------------------------------------------
-            # C2P-CLIP stores weights under "model.*" (HuggingFace CLIPModel).
-            # We mirror that attribute name so keys align.
-            # The classification head (binary: real vs fake) sits outside "model.*"
-            # and is loaded via strict=False.
+            # Checkpoint layout (confirmed by probe):
+            #   model.vision_model.*      — CLIP ViT-L/14 vision encoder
+            #   model.visual_projection.* — 768→768 projection layer
+            #   model.fc.weight/bias      — binary head (Linear, out=2)
+            #
+            # CLIPModel.get_image_features() runs vision_model → visual_projection
+            # and returns (B, 768) normalised embeddings.
+            # The fc head then maps to (B, 2) logits.
             # ------------------------------------------------------------------
 
             class _C2PCLIP(nn.Module):
@@ -65,14 +67,13 @@ class SPSLDetector(DetectorBase):
                         "openai/clip-vit-large-patch14",
                         ignore_mismatched_sizes=True,
                     )
-                    # Binary head (real=0, fake=1)
-                    # CLIPModel.get_image_features() output dim = 768
-                    self.classifier = nn.Linear(768, 2)
+                    # fc head attached to model — must be model.fc to match keys
+                    self.model.fc = nn.Linear(768, 2)
 
                 def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
                     feats = self.model.get_image_features(pixel_values=pixel_values)
-                    feats = feats / feats.norm(dim=-1, keepdim=True)
-                    return self.classifier(feats)   # (B, 2) logits
+                    # get_image_features already applies visual_projection + L2 norm
+                    return self.model.fc(feats)   # (B, 2) logits
 
             net = _C2PCLIP()
             ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=False)
@@ -86,7 +87,7 @@ class SPSLDetector(DetectorBase):
             )
             if missing:
                 log.warning("C2P-CLIP missing keys (first 5): %s", missing[:5])
-            self.model = net.to(device).eval()
+            self.model_wrapper = net.to(device).eval()
             self._use_placeholder = False
             log.info("C2P-CLIP: loaded ok")
         except Exception as e:
@@ -105,7 +106,6 @@ class SPSLDetector(DetectorBase):
         import torch
         from torchvision import transforms
 
-        # C2P-CLIP: CLIP input spec 224×224 with CLIP normalization
         tf = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((224, 224)),
@@ -114,7 +114,7 @@ class SPSLDetector(DetectorBase):
         ])
         x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            logits = self.model(x)                  # (1, 2)
+            logits = self.model_wrapper(x)           # (1, 2)
             probs = torch.softmax(logits, dim=1)
-            score = float(probs[0, 1].item())       # fake class
+            score = float(probs[0, 1].item())        # fake class
         return DetectorOutput(score=score, heatmap=None)

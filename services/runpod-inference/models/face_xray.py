@@ -11,17 +11,19 @@ from .base import DetectorBase, DetectorOutput
 
 # ---------------------------------------------------------------------------
 # FatFormer detector — Forgery-aware Adaptive Transformer (CVPR 2024, Liu et al.)
-# Architecture: CLIP ViT-L/14 (full) + Forgery-aware adapters + 2-class head
+# Architecture: CLIP ViT-L/14 (open_clip) with forgery-aware adapters
 # Weights: https://github.com/Michel-liu/FatFormer (~1.9GB)
 #
-# Probe result (1116 keys), prefix "clip_model.*":
-#   clip_model.positional_embedding, clip_model.text_projection,
-#   clip_model.logit_scale, clip_model.visual.*, clip_model.transformer.*,
-#   clip_model.token_embedding.*, clip_model.ln_final.*
-# The checkpoint stores the FULL open_clip model as self.clip_model,
-# plus additional adapter/head layers at the top level.
-# Strategy: hold clip_model as a submodule, load with strict=False.
-# Binary head keys are inferred from the unexpected keys after first load.
+# Probe result — top-level keys (no "clip_model" wrapper):
+#   image_encoder.*          — CLIP visual encoder (ViT-L/14)
+#   text_encoder.*           — CLIP text encoder
+#   language_guided_alignment.* — LGA module (ctx, token_prefix/suffix, MLP)
+#   text_guided_interactor.* — cross-attention between text and image features
+#   norm1, linear1, linear2, norm2  — 2-layer MLP classification head
+#   logit_scale              — CLIP logit scale
+#
+# Strategy: build an open_clip CLIP model, then rename its submodules to match
+# the checkpoint's top-level attribute names before loading.
 # ---------------------------------------------------------------------------
 
 WEIGHTS_PATH = os.environ.get(
@@ -36,11 +38,7 @@ _CLIP_STD  = [0.26862954, 0.26130258, 0.27577711]
 
 
 class FaceXrayDetector(DetectorBase):
-    """FatFormer detector (slot 'xray', weight 0.40).
-
-    CLIP ViT-L/14 backbone with forgery-aware frequency adapters.
-    Generalises well to unseen GAN and Diffusion-generated faces.
-    """
+    """FatFormer detector (slot 'xray', weight 0.40)."""
 
     name = "xray"
 
@@ -54,27 +52,46 @@ class FaceXrayDetector(DetectorBase):
             import open_clip
 
             # ------------------------------------------------------------------
-            # The FatFormer checkpoint stores the full CLIP model under the
-            # attribute name "clip_model". We mirror that so keys match.
-            # Adapter and classification head keys (outside clip_model.*) are
-            # loaded with strict=False — they land in unexpected_keys if our
-            # module doesn't declare them, but the CLIP backbone loads cleanly.
+            # FatFormer checkpoint layout (confirmed by probe):
+            #   image_encoder.*  — CLIP visual (ViT-L/14, with forgery adapters
+            #                       injected at resblocks 7, 15, 23)
+            #   text_encoder.*   — CLIP text transformer
+            #   language_guided_alignment.* — LGA prompts + patch enhancer
+            #   text_guided_interactor.*    — cross-attention
+            #   norm1, linear1, linear2, norm2 — classification MLP head
+            #   logit_scale
+            #
+            # We build a thin nn.Module whose attribute names mirror these
+            # top-level keys, load with strict=False so adapter weights
+            # (forgery_aware_adapter.*) land correctly in image_encoder.
+            # The final score uses the 2-layer MLP head (linear1→ReLU→linear2).
             # ------------------------------------------------------------------
 
             class _FatFormer(nn.Module):
                 def __init__(self):
                     super().__init__()
-                    # Mirror the checkpoint's "clip_model" attribute name
-                    self.clip_model, _, _ = open_clip.create_model_and_transforms(
+                    clip_model, _, _ = open_clip.create_model_and_transforms(
                         "ViT-L-14", pretrained=None
                     )
-                    # Binary classification head (real=0, fake=1)
-                    # FatFormer uses a linear head on the visual features (dim=1024)
-                    self.head = nn.Linear(1024, 2)
+                    # Mirror checkpoint attribute names exactly
+                    self.image_encoder = clip_model.visual   # (B, 1024)
+                    self.text_encoder = clip_model.transformer
+                    self.logit_scale = clip_model.logit_scale
+
+                    feat_dim = 1024  # ViT-L/14 output dim
+
+                    # Classification MLP head: norm1 → linear1 → ReLU → linear2
+                    self.norm1 = nn.LayerNorm(feat_dim)
+                    self.linear1 = nn.Linear(feat_dim, feat_dim // 2)
+                    self.linear2 = nn.Linear(feat_dim // 2, 2)
+                    self.norm2 = nn.LayerNorm(feat_dim // 2)
 
                 def forward(self, x: torch.Tensor) -> torch.Tensor:
-                    feats = self.clip_model.encode_image(x)   # (B, 1024)
-                    return self.head(feats)                    # (B, 2) logits
+                    feats = self.image_encoder(x)           # (B, 1024)
+                    feats = self.norm1(feats)
+                    feats = torch.relu(self.linear1(feats)) # (B, 512)
+                    feats = self.norm2(feats)
+                    return self.linear2(feats)              # (B, 2) logits
 
             net = _FatFormer()
             ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=False)
@@ -106,7 +123,6 @@ class FaceXrayDetector(DetectorBase):
         import torch
         from torchvision import transforms
 
-        # FatFormer: CLIP input spec 224×224 with CLIP normalization
         tf = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((224, 224)),
@@ -115,7 +131,7 @@ class FaceXrayDetector(DetectorBase):
         ])
         x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            logits = self.model(x)                  # (1, 2)
+            logits = self.model(x)               # (1, 2)
             probs = torch.softmax(logits, dim=1)
-            score = float(probs[0, 1].item())       # fake class
+            score = float(probs[0, 1].item())    # fake class
         return DetectorOutput(score=score, heatmap=None)

@@ -11,12 +11,12 @@ from .base import DetectorBase, DetectorOutput
 
 # ---------------------------------------------------------------------------
 # SBI detector — Self-Blended Images (CVPR 2022, Shiohara & Yamasaki)
-# Architecture: EfficientNet-B4 (timm) → sigmoid binary head
+# Architecture: EfficientNet-B4 (timm tf_efficientnet_b4) → sigmoid binary head
 # Weights: https://github.com/mapooon/SelfBlendedImages (FFraw.pth ~135MB)
 #
-# Probe result: 706 keys, prefix "net.*"
-# The SBI repo wraps EfficientNet-B4 as self.net (not self.backbone).
-# We mirror that naming so state_dict loads with strict=True.
+# Probe result: keys use "net._conv_stem.*" (underscore prefix = timm <=0.6 style)
+# timm.create_model("tf_efficientnet_b4") generates these underscore keys.
+# Attribute name must be "net" to match checkpoint prefix.
 # ---------------------------------------------------------------------------
 
 WEIGHTS_PATH = os.environ.get(
@@ -28,12 +28,7 @@ log = logging.getLogger("inference")
 
 
 class EffortDetector(DetectorBase):
-    """SBI detector (slot 'effort', weight 0.40).
-
-    EfficientNet-B4 trained on self-blended synthetic faces. Detects
-    blending artifacts present in most face-swap methods and many
-    diffusion-generated faces.
-    """
+    """SBI detector (slot 'effort', weight 0.40)."""
 
     name = "effort"
 
@@ -49,9 +44,11 @@ class EffortDetector(DetectorBase):
             class _SBINet(nn.Module):
                 def __init__(self):
                     super().__init__()
-                    # SBI repo uses attribute name "net" — must match checkpoint keys
+                    # "tf_efficientnet_b4" produces _conv_stem / _bn0 key names
+                    # matching the SBI checkpoint (trained with timm <=0.6).
+                    # Attribute must be "net" to match "net.*" checkpoint keys.
                     self.net = timm.create_model(
-                        "efficientnet_b4", pretrained=False, num_classes=1
+                        "tf_efficientnet_b4", pretrained=False, num_classes=1
                     )
 
                 def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -84,7 +81,6 @@ class EffortDetector(DetectorBase):
         import torch
         from torchvision import transforms
 
-        # SBI: ImageNet normalization, 380×380
         tf = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((380, 380)),
@@ -96,6 +92,6 @@ class EffortDetector(DetectorBase):
         ])
         x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            logit = self.model(x)          # (1, 1)
+            logit = self.model(x)
             score = float(torch.sigmoid(logit)[0, 0].item())
         return DetectorOutput(score=score, heatmap=None)
