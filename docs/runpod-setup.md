@@ -91,36 +91,43 @@ python3 -m venv /workspace/venv --system-site-packages && source /workspace/venv
 
 #### 방법 B — `runpodctl` CLI (대용량, 빠름)
 
-로컬 PC PowerShell에서:
+**1. runpodctl 설치 (최초 1회)**
+
+PowerShell에서:
 
 ```powershell
-# runpodctl 설치 (최초 1회)
-winget install runpod.runpodctl
-
-# API 키 설정 (RunPod 대시보드 → Settings → API Keys)
-runpodctl config --apiKey YOUR_API_KEY
-
-# 파일 전송 (POD_ID는 RunPod 대시보드에서 확인)
-runpodctl send "C:\Users\user\Downloads\FFraw.tar"
-runpodctl send "C:\Users\user\Downloads\fatformer_4class_ckpt.pth"
-runpodctl send "C:\Users\user\Downloads\C2P_CLIP-GenImage_release_20250224.pth"
+Invoke-WebRequest -Uri "https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.exe" -OutFile "$env:USERPROFILE\runpodctl.exe"
 ```
 
-RunPod 웹터미널에서 수신 (각 파일마다 실행):
+> 다운로드 후 `$env:USERPROFILE\runpodctl.exe` 경로로 설치됩니다. 이후 명령에서 `runpodctl` 대신 `~\runpodctl.exe`로 실행합니다.
+
+**2. 파일 전송**
+
+파일 3개를 각각 전송합니다. `send` 실행 시 출력되는 `[CODE]`를 RunPod 웹터미널의 `receive` 명령에 붙여넣습니다.
+
+로컬 PowerShell (파일마다 순서대로 실행):
+
+```powershell
+~\runpodctl.exe send "C:\Users\user\Downloads\FFraw.tar"
+```
+```powershell
+~\runpodctl.exe send "C:\Users\user\Downloads\fatformer_4class_ckpt.pth"
+```
+```powershell
+~\runpodctl.exe send "C:\Users\user\Downloads\C2P_CLIP-GenImage_release_20250224.pth"
+```
+
+RunPod 웹터미널에서 수신 (각 `send`마다 코드 확인 후 실행):
 
 ```
 mkdir -p /workspace/weights && runpodctl receive [CODE] && mv FFraw.tar /workspace/weights/sbi_best.pth
 ```
-
 ```
 runpodctl receive [CODE] && mv fatformer_4class_ckpt.pth /workspace/weights/fatformer_best.pth
 ```
-
 ```
 runpodctl receive [CODE] && mv C2P_CLIP-GenImage_release_20250224.pth /workspace/weights/c2pclip_best.pth
 ```
-
-> `send` 명령 실행 시 출력되는 `[CODE]`를 `receive` 명령에 붙여넣습니다.
 
 #### 업로드 확인
 
