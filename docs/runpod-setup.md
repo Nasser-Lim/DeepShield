@@ -66,12 +66,13 @@ apt-get update && apt-get install -y git wget libgl1 libglib2.0-0 && git clone h
 ### Step 2 — Python venv 생성 및 패키지 설치
 
 ```
-/usr/bin/python3 -m venv /workspace/ds_venv --system-site-packages && source /workspace/ds_venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/ds_repo/services/runpod-inference/requirements.txt && pip install open_clip_torch pytorch_wavelets transformers accelerate
+/usr/bin/python3 -m venv /workspace/ds_venv --system-site-packages && source /workspace/ds_venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/ds_repo/services/runpod-inference/requirements.txt && pip install open_clip_torch pytorch_wavelets transformers accelerate mtcnn tensorflow-cpu
 ```
 
 > - `/usr/bin/python3`을 명시해 shell PATH 오염 방지
 > - `--system-site-packages`로 base image의 torch/torchvision/cuda 재사용
-> - tensorflow-cpu는 **설치하지 않음** — base image에 이미 포함, 별도 설치 시 venv 손상
+> - `mtcnn tensorflow-cpu`: MTCNN 얼굴 감지기 의존성. venv 생성과 함께 설치해야 안전
+> - tensorflow-cpu를 **단독으로** 나중에 설치하면 venv가 손상될 수 있으므로 반드시 이 명령 전체를 한 번에 실행
 
 ---
 
@@ -181,7 +182,7 @@ source /workspace/ds_venv/bin/activate && mkdir -p /tmp/ds_uploads && cd /worksp
 **venv 손상 시 재생성:**
 
 ```
-/usr/bin/python3 -m venv /workspace/ds_venv --system-site-packages && source /workspace/ds_venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/ds_repo/services/runpod-inference/requirements.txt && pip install open_clip_torch pytorch_wavelets transformers accelerate
+/usr/bin/python3 -m venv /workspace/ds_venv --system-site-packages && source /workspace/ds_venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/ds_repo/services/runpod-inference/requirements.txt && pip install open_clip_torch pytorch_wavelets transformers accelerate mtcnn tensorflow-cpu
 ```
 
 **재시작 후 반드시 할 것:**
@@ -217,6 +218,7 @@ source /workspace/ds_venv/bin/activate && mkdir -p /tmp/ds_uploads && cd /worksp
 | `FatFormer: ... placeholder active` | **정상** — 추론 경로 미구현 | 무시 (앙상블 기여 없음) |
 | `SBI: ... using placeholder` | 가중치 파일 없음 | `ls /workspace/ds_weights/sbi_best.pth` 확인, 재업로드 |
 | `C2P-CLIP: ... using placeholder` | 가중치 파일 없음 | `ls /workspace/ds_weights/c2pclip_best.pth` 확인, 재업로드 |
+| `MTCNN unavailable ... falling back to Haar` | tensorflow 미설치 | venv 재생성 명령 실행 (mtcnn tensorflow-cpu 포함) |
 | `No module named 'X'` | venv 손상 | 위 **venv 재생성** 명령 실행 |
 | `No such file or directory: '/workspace/ds_venv/bin/python3'` | shell PATH 오염 (이전 venv 잔재) | `exec bash` 후 복구 명령 재실행 |
 | `422 Unprocessable Entity` | MTCNN 얼굴 미감지 | 얼굴이 포함된 이미지 사용 |
