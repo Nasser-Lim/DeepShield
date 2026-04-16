@@ -21,7 +21,7 @@ from .base import DetectorBase, DetectorOutput
 
 WEIGHTS_PATH = os.environ.get(
     "SBI_WEIGHTS",
-    "/workspace/weights/sbi_best.pth",
+    "/workspace/ds_weights/sbi_best.pth",
 )
 
 log = logging.getLogger("inference")

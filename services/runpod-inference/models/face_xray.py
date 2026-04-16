@@ -27,7 +27,7 @@ from .base import DetectorBase, DetectorOutput
 
 WEIGHTS_PATH = os.environ.get(
     "FATFORMER_WEIGHTS",
-    "/workspace/weights/fatformer_best.pth",
+    "/workspace/ds_weights/fatformer_best.pth",
 )
 
 log = logging.getLogger("inference")

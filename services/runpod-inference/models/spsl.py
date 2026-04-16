@@ -25,7 +25,7 @@ from .base import DetectorBase, DetectorOutput
 
 WEIGHTS_PATH = os.environ.get(
     "C2PCLIP_WEIGHTS",
-    "/workspace/weights/c2pclip_best.pth",
+    "/workspace/ds_weights/c2pclip_best.pth",
 )
 
 log = logging.getLogger("inference")
