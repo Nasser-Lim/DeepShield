@@ -74,7 +74,7 @@ class SPSLDetector(DetectorBase):
                     # get_image_features returns Tensor in older transformers,
                     # but BaseModelOutputWithPooling in newer versions — unwrap if needed
                     out = self.model.get_image_features(pixel_values=pixel_values)
-                    feats = out if isinstance(out, torch.Tensor) else out.image_embeds
+                    feats = out if isinstance(out, torch.Tensor) else out.pooler_output
                     return self.model.fc(feats)   # (B, 1) logit → sigmoid
 
             net = _C2PCLIP()
