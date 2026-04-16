@@ -15,5 +15,5 @@ mtcnn==0.1.1
 #   pip install transformers accelerate
 # PyTorch is provided by the RunPod base image; install separately for local dev:
 #   pip install torch==2.4.1 torchvision==0.19.1
-# mtcnn requires tensorflow; on RunPod use tensorflow-cpu:
-#   pip install tensorflow-cpu
+# mtcnn requires tensorflow; RunPod base image includes tensorflow already.
+# Do NOT pip install tensorflow-cpu — it bloats the venv and causes rm -rf issues.

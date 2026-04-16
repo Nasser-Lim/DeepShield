@@ -64,7 +64,7 @@ apt-get update && apt-get install -y git wget libgl1 libglib2.0-0 && cd /workspa
 ### Step 2 — Python venv 생성 및 패키지 설치
 
 ```
-python3 -m venv /workspace/venv --system-site-packages && source /workspace/venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/deepshield/services/runpod-inference/requirements.txt && pip install mtcnn tensorflow-cpu open_clip_torch pytorch_wavelets transformers accelerate
+python3 -m venv /workspace/venv --system-site-packages && source /workspace/venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/deepshield/services/runpod-inference/requirements.txt && pip install open_clip_torch pytorch_wavelets transformers accelerate
 ```
 
 > `--system-site-packages` 옵션으로 base image의 torch/torchvision/cuda를 그대로 사용합니다.
@@ -208,7 +208,7 @@ RUNPOD_INFERENCE_URL=https://[POD_ID]-8000.proxy.runpod.net
 **복구 한 줄:**
 
 ```
-cd /workspace/deepshield && git pull && source /workspace/venv/bin/activate && pip install --quiet transformers accelerate open_clip_torch pytorch_wavelets mtcnn tensorflow-cpu && mkdir -p /tmp/deepshield/uploads && cd services/runpod-inference && DEVICE=cuda UPLOAD_DIR=/tmp/deepshield/uploads python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
+cd /workspace/deepshield && git pull && source /workspace/venv/bin/activate && pip install --quiet open_clip_torch pytorch_wavelets transformers accelerate && mkdir -p /tmp/deepshield/uploads && cd services/runpod-inference && DEVICE=cuda UPLOAD_DIR=/tmp/deepshield/uploads python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 > `pip install --quiet`는 이미 설치된 패키지면 즉시 통과하므로 안전망으로
