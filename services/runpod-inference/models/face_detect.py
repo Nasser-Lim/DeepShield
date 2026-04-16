@@ -32,6 +32,7 @@ class FaceDetector:
             os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
             from mtcnn import MTCNN
             self._mtcnn = MTCNN()
+            log.info("FaceDetector: using MTCNN")
         except Exception as e:
             log.warning("MTCNN unavailable (%s) — falling back to Haar cascade", e)
             cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
