@@ -71,7 +71,10 @@ class SPSLDetector(DetectorBase):
                     self.model.fc = nn.Linear(768, 1)
 
                 def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
-                    feats = self.model.get_image_features(pixel_values=pixel_values)
+                    # get_image_features returns Tensor in older transformers,
+                    # but BaseModelOutputWithPooling in newer versions — unwrap if needed
+                    out = self.model.get_image_features(pixel_values=pixel_values)
+                    feats = out if isinstance(out, torch.Tensor) else out.image_embeds
                     return self.model.fc(feats)   # (B, 1) logit → sigmoid
 
             net = _C2PCLIP()
