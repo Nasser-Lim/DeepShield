@@ -63,6 +63,10 @@ class FaceXrayDetector(DetectorBase):
                 def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
                     out = self.clip.get_image_features(pixel_values=pixel_values)
                     feats = out if isinstance(out, torch.Tensor) else out.pooler_output
+                    # openai/clip encode_image() returns L2-normalised features.
+                    # HF get_image_features() does not normalise — apply manually
+                    # so that fc weights (trained on normalised features) work correctly.
+                    feats = feats / (feats.norm(dim=-1, keepdim=True) + 1e-6)
                     return self.fc(feats)  # (B, 1) logit → sigmoid
 
             net = _UnivFD()
@@ -112,9 +116,12 @@ class FaceXrayDetector(DetectorBase):
         import torch
         from torchvision import transforms
 
+        # UnivFD official preprocessing: Resize to 256 first so CenterCrop
+        # always has enough pixels, then CenterCrop(224) — matches validate.py.
         tf = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize((224, 224)),
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize(mean=_CLIP_MEAN, std=_CLIP_STD),
         ])
