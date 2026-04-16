@@ -1,9 +1,10 @@
 # RunPod A5000 셋업 가이드
 
 > **설계 원칙**
-> - SBI / FatFormer / C2P-CLIP 순수 PyTorch 구현, 가중치(.pth)만 로드
+> - SBI / UnivFD / C2P-CLIP 순수 PyTorch 구현, 가중치(.pth)만 로드
 > - `/workspace/` 하위 경로명을 **고유 이름**으로 지정해 Pod 재시작 시 RunPod이 초기화하지 않도록 방지
 > - 가중치·venv 모두 Volume에 보존 → Pod 재시작 후 서버 기동만 하면 됨
+> - 추론 파이프라인에 **JPEG TTA**(Q=75 재압축) 적용 → 언론사 고압축 사진에서 압축 아티팩트로 인한 false positive 완화
 
 ---
 
@@ -30,13 +31,13 @@
 │   └── services/runpod-inference/
 │       ├── server.py
 │       ├── models/
-│       │   ├── effort.py            (SBI — EfficientNet-B4)
-│       │   ├── face_xray.py         (FatFormer — CLIP ViT-L/14, placeholder)
+│       │   ├── effort.py            (SBI    — EfficientNet-B4)
+│       │   ├── face_xray.py         (UnivFD — HF CLIPModel ViT-L/14 + linear probe)
 │       │   └── spsl.py              (C2P-CLIP — HF CLIPModel ViT-L/14)
 │       └── requirements.txt
 ├── ds_weights/
 │   ├── sbi_best.pth                 (~135MB)
-│   ├── fatformer_best.pth           (~1.9GB)
+│   ├── univfd_fc_weights.pth        (~3KB  — head-only linear probe)
 │   └── c2pclip_best.pth             (~1.2GB)
 └── ds_venv/                         (Python 가상환경 — 재시작 후에도 보존)
 ```
@@ -48,8 +49,13 @@
 | 모델 | 로컬 파일명 | RunPod 저장 경로 | 크기 |
 |---|---|---|---|
 | SBI | `sbi_best.pth` (FFraw.tar를 이름 변경) | `/workspace/ds_weights/sbi_best.pth` | ~135MB |
-| FatFormer | `fatformer_4class_ckpt.pth` | `/workspace/ds_weights/fatformer_best.pth` | ~1.9GB |
+| UnivFD | `fc_weights.pth` ([공식 저장소 pretrained_weights/](https://github.com/WisconsinAIVision/UniversalFakeDetect)) | `/workspace/ds_weights/univfd_fc_weights.pth` | ~3KB |
 | C2P-CLIP | `C2P_CLIP-GenImage_release_20250224.pth` | `/workspace/ds_weights/c2pclip_best.pth` | ~1.2GB |
+
+> **UnivFD는 head-only 가중치(~3KB)**입니다. CLIP ViT-L/14 백본은
+> HuggingFace에서 자동 다운로드됩니다 (C2P-CLIP이 이미 다운받아놓았으므로
+> 캐시 공유). 최초 기동 시 `openai/clip-vit-large-patch14` 다운로드에
+> 수 분이 걸릴 수 있습니다 (~1.7GB).
 
 ---
 
@@ -99,11 +105,11 @@ mkdir -p /workspace/ds_weights && cd /workspace/ds_weights && runpodctl receive 
 
 로컬:
 ```powershell
-~\runpodctl.exe send "C:\Users\user\Downloads\fatformer_4class_ckpt.pth"
+~\runpodctl.exe send "C:\Users\user\Downloads\fc_weights.pth"
 ```
 RunPod:
 ```
-cd /workspace/ds_weights && runpodctl receive [CODE] && mv fatformer_4class_ckpt.pth fatformer_best.pth
+cd /workspace/ds_weights && runpodctl receive [CODE] && mv fc_weights.pth univfd_fc_weights.pth
 ```
 
 로컬:
@@ -124,7 +130,7 @@ ls -lh /workspace/ds_weights/
 예상 출력:
 ```
 -rw-r--r-- 1 root root 135M sbi_best.pth
--rw-r--r-- 1 root root 1.9G fatformer_best.pth
+-rw-r--r-- 1 root root 3.0K univfd_fc_weights.pth
 -rw-r--r-- 1 root root 1.2G c2pclip_best.pth
 ```
 
@@ -140,11 +146,11 @@ source /workspace/ds_venv/bin/activate && mkdir -p /tmp/ds_uploads && cd /worksp
 ```
 INFO:inference:SBI: missing=0 unexpected=0
 INFO:inference:SBI: loaded ok
-WARNING:inference:FatFormer: full inference not yet implemented — placeholder active
+INFO:inference:UnivFD: head loaded, backbone missing=N unexpected=0   (N=CLIP 백본 관련, 정상)
+INFO:inference:UnivFD: loaded ok
 INFO:inference:C2P-CLIP: missing=N unexpected=2   (N=text_model 관련, 정상)
 INFO:inference:C2P-CLIP: loaded ok
 INFO:inference:FaceDetector: using MTCNN
-INFO:inference:Detectors ready: ['effort', 'xray', 'spsl']
 INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
@@ -197,14 +203,16 @@ source /workspace/ds_venv/bin/activate && mkdir -p /tmp/ds_uploads && cd /worksp
 
 | 슬롯 | 모델 | 아키텍처 | 입력 | 앙상블 가중치 |
 |---|---|---|---|---|
-| `effort` | SBI (CVPR 2022) | EfficientNet-B4 | 380×380 ImageNet 정규화 | 0.50 |
-| `xray` | FatFormer (CVPR 2024) | CLIP ViT-L/14 + adapter | 224×224 CLIP 정규화 | **0.00 (placeholder)** |
-| `spsl` | C2P-CLIP (AAAI 2025) | HF CLIPModel ViT-L/14 | 224×224 CLIP 정규화 | 0.50 |
+| `effort` | SBI (CVPR 2022) | EfficientNet-B4 | 380×380 ImageNet 정규화 | 0.35 |
+| `xray` | UnivFD (CVPR 2023) | CLIP ViT-L/14 + linear probe | 224×224 CLIP 정규화 | 0.35 |
+| `spsl` | C2P-CLIP (AAAI 2025) | HF CLIPModel ViT-L/14 | 224×224 CLIP 정규화 | 0.30 |
 
-> FatFormer는 language-guided alignment 추론 경로 미구현으로 중립값(0.5) placeholder.
-> 가중치 0으로 앙상블 기여 없음.
+> **JPEG TTA 적용**: 각 추론 시 원본 얼굴 크롭과 Q=75 재압축 크롭을 모두
+> 모델에 입력하고 평균 점수를 최종 slot score로 사용합니다. 응답에
+> `score_raw`, `score_tta`, `jpeg_tta_delta` 필드가 포함됩니다. delta가 0.3
+> 이상이면 판정 신뢰도가 낮다는 신호입니다.
 
-판정 기준: `final = (0.50×SBI + 0.50×C2P-CLIP)`
+판정 기준: `final = (0.35×SBI + 0.35×UnivFD + 0.30×C2P-CLIP)`
 - `< 0.30` → **safe**
 - `0.30 ~ 0.70` → **caution**
 - `≥ 0.70` → **risk**
@@ -215,8 +223,9 @@ source /workspace/ds_venv/bin/activate && mkdir -p /tmp/ds_uploads && cd /worksp
 
 | 증상 | 원인 | 해결 |
 |---|---|---|
-| `FatFormer: ... placeholder active` | **정상** — 추론 경로 미구현 | 무시 (앙상블 기여 없음) |
+| `UnivFD load failed ... fc head not found` | 가중치 파일이 head-only 형식 아님 | 공식 `fc_weights.pth` 재다운로드, `/workspace/ds_weights/univfd_fc_weights.pth`로 저장 |
 | `SBI: ... using placeholder` | 가중치 파일 없음 | `ls /workspace/ds_weights/sbi_best.pth` 확인, 재업로드 |
+| `UnivFD: ... using placeholder` | 가중치 파일 없음 | `ls /workspace/ds_weights/univfd_fc_weights.pth` 확인, 재업로드 |
 | `C2P-CLIP: ... using placeholder` | 가중치 파일 없음 | `ls /workspace/ds_weights/c2pclip_best.pth` 확인, 재업로드 |
 | `MTCNN unavailable ... falling back to Haar` | tensorflow 미설치 | venv 재생성 명령 실행 (mtcnn tensorflow-cpu 포함) |
 | `No module named 'X'` | venv 손상 | 위 **venv 재생성** 명령 실행 |

@@ -9,23 +9,23 @@ const TABS: { key: TabKey; label: string; weight: string; blurb: string; detail:
   {
     key: "effort",
     label: "SBI",
-    weight: "40%",
+    weight: "35%",
     blurb: "자가 혼합 이미지 합성 흔적 탐지",
-    detail: "EfficientNet-B4 기반. 얼굴 합성 시 발생하는 블렌딩 경계 아티팩트를 학습합니다. GAN·Diffusion 모두에서 나타나는 합성 흔적에 민감하며 실사 사진 오탐률이 낮습니다. (CVPR 2022)",
+    detail: "EfficientNet-B4 기반. 얼굴 합성 시 발생하는 블렌딩 경계 아티팩트를 학습합니다. GAN·Diffusion 모두에서 나타나는 합성 흔적에 민감합니다. (CVPR 2022)",
   },
   {
     key: "xray",
-    label: "FatFormer",
-    weight: "40%",
-    blurb: "CLIP 기반 위조 적응형 트랜스포머",
-    detail: "CLIP ViT-L/14 백본에 위조 인식 어댑터를 추가했습니다. 주파수 도메인 분석과 언어-이미지 정렬을 결합해 학습하지 않은 생성 모델에도 높은 일반화 성능을 보입니다. (CVPR 2024)",
+    label: "UnivFD",
+    weight: "35%",
+    blurb: "CLIP 기반 범용 생성 이미지 탐지기",
+    detail: "CLIP ViT-L/14 시각 특징 위에 linear probe를 학습해 다양한 GAN·Diffusion 생성 이미지를 판별합니다. JPEG·블러 증강으로 훈련되어 언론사 압축 사진에 비교적 강건합니다. (CVPR 2023)",
   },
   {
     key: "spsl",
     label: "C2P-CLIP",
-    weight: "20%",
+    weight: "30%",
     blurb: "카테고리 공통 프롬프트 CLIP 탐지",
-    detail: "CLIP ViT-L/14에 카테고리 공통 프롬프트(C2P)를 주입해 실제·딥페이크 텍스트 임베딩과의 유사도로 판별합니다. 실사 사진에 대한 오탐률이 매우 낮습니다. (AAAI 2025)",
+    detail: "CLIP ViT-L/14에 카테고리 공통 프롬프트(C2P)를 주입해 실제·딥페이크 텍스트 임베딩과의 유사도로 판별합니다. GenImage 학습. (AAAI 2025)",
   },
 ];
 
@@ -98,6 +98,25 @@ export function ModelScoreTabs({ scores }: { scores: InferResponse }) {
                 {tabPct}%
               </span>
             </div>
+
+            {/* JPEG TTA breakdown — raw vs. Q=75 re-encoded */}
+            {tabScore.score_raw != null && tabScore.score_tta != null && (
+              <div className="flex items-center gap-3 text-xs text-slate-500 font-mono">
+                <span>원본 {Math.round(tabScore.score_raw * 100)}%</span>
+                <span className="text-slate-300">·</span>
+                <span>재압축 {Math.round(tabScore.score_tta * 100)}%</span>
+                <span className="text-slate-300">·</span>
+                <span
+                  className={
+                    Math.abs(tabScore.score_raw - tabScore.score_tta) > 0.3
+                      ? "text-orange-600 font-semibold"
+                      : "text-slate-400"
+                  }
+                >
+                  Δ{Math.abs(tabScore.score_raw - tabScore.score_tta).toFixed(2)}
+                </span>
+              </div>
+            )}
 
             {/* Model description */}
             <div className="rounded-md bg-slate-50 border border-slate-100 px-3 py-2.5">

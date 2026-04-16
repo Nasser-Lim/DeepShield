@@ -9,25 +9,20 @@ import numpy as np
 from .base import DetectorBase, DetectorOutput
 
 # ---------------------------------------------------------------------------
-# FatFormer detector — Forgery-aware Adaptive Transformer (CVPR 2024, Liu et al.)
-# Architecture: CLIP ViT-L/14 (open_clip) with forgery-aware adapters
-# Weights: https://github.com/Michel-liu/FatFormer (~1.9GB)
+# UnivFD detector — Universal Fake Image Detector (CVPR 2023, Ojha et al.)
+# Repo: https://github.com/WisconsinAIVision/UniversalFakeDetect
 #
-# Probe result — top-level keys (no "clip_model" wrapper):
-#   image_encoder.*          — CLIP visual encoder (ViT-L/14)
-#   text_encoder.*           — CLIP text encoder
-#   language_guided_alignment.* — LGA module (ctx, token_prefix/suffix, MLP)
-#   text_guided_interactor.* — cross-attention between text and image features
-#   norm1, linear1, linear2, norm2  — 2-layer MLP classification head
-#   logit_scale              — CLIP logit scale
+# Architecture: frozen CLIP ViT-L/14 visual encoder + Linear(768, 1) probe
+# Trained with JPEG/blur augmentation → robust to compressed press photos.
+# Weights file: fc_weights.pth (~3KB — head-only, 768→1 linear layer)
 #
-# Strategy: build an open_clip CLIP model, then rename its submodules to match
-# the checkpoint's top-level attribute names before loading.
+# Slot name "xray" kept for API schema compatibility; semantically this is
+# now UnivFD, not FatFormer (see docs/runpod-setup.md).
 # ---------------------------------------------------------------------------
 
 WEIGHTS_PATH = os.environ.get(
-    "FATFORMER_WEIGHTS",
-    "/workspace/ds_weights/fatformer_best.pth",
+    "UNIVFD_WEIGHTS",
+    "/workspace/ds_weights/univfd_fc_weights.pth",
 )
 
 log = logging.getLogger("inference")
@@ -37,7 +32,7 @@ _CLIP_STD  = [0.26862954, 0.26130258, 0.27577711]
 
 
 class FaceXrayDetector(DetectorBase):
-    """FatFormer detector (slot 'xray', weight 0.40)."""
+    """UnivFD detector (slot 'xray')."""
 
     name = "xray"
 
@@ -45,19 +40,70 @@ class FaceXrayDetector(DetectorBase):
         self.device = device
         self._use_placeholder = True
 
-        # FatFormer inference requires the learned language-guided alignment
-        # prompts (language_guided_alignment.ctx + text_encoder) and the
-        # text-guided interactor cross-attention. Re-implementing the full
-        # inference path from weights alone is non-trivial — leaving as a
-        # follow-up task. For now the slot uses a deterministic placeholder
-        # and the ensemble weight is reduced (apps/api/app/config.py).
-        log.warning("FatFormer: full inference not yet implemented — placeholder active")
+        try:
+            import torch
+            import torch.nn as nn
+            from transformers import CLIPModel
+
+            # UnivFD uses the CLIP visual trunk only (no text encoder, no
+            # visual_projection). HuggingFace CLIPModel.vision_model returns
+            # pooled hidden state of dim 1024 → the UnivFD fc is 768→1, so
+            # they feed visual_projection output (768) into fc.
+            # We use get_image_features() which runs vision_model +
+            # visual_projection → (B, 768).
+            class _UnivFD(nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.clip = CLIPModel.from_pretrained(
+                        "openai/clip-vit-large-patch14",
+                        ignore_mismatched_sizes=True,
+                    )
+                    self.fc = nn.Linear(768, 1)
+
+                def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+                    out = self.clip.get_image_features(pixel_values=pixel_values)
+                    feats = out if isinstance(out, torch.Tensor) else out.pooler_output
+                    return self.fc(feats)  # (B, 1) logit → sigmoid
+
+            net = _UnivFD()
+
+            # fc_weights.pth is head-only (fc.weight / fc.bias).
+            ckpt = torch.load(WEIGHTS_PATH, map_location="cpu", weights_only=False)
+            if isinstance(ckpt, dict):
+                sd = ckpt.get("state_dict", ckpt.get("model_state_dict", ckpt))
+            else:
+                sd = ckpt
+
+            # Accept both {fc.weight, fc.bias} and bare {weight, bias} layouts.
+            remapped = {}
+            for k, v in sd.items():
+                if k in ("weight", "bias"):
+                    remapped[f"fc.{k}"] = v
+                elif k.startswith("fc."):
+                    remapped[k] = v
+                else:
+                    remapped[k] = v
+            missing, unexpected = net.load_state_dict(remapped, strict=False)
+
+            # CLIP backbone keys are expected to be missing (head-only ckpt);
+            # fc.weight/bias must be present.
+            head_loaded = "fc.weight" not in missing and "fc.bias" not in missing
+            if not head_loaded:
+                raise RuntimeError(
+                    f"UnivFD fc head not found in checkpoint — keys: {list(sd.keys())[:5]}"
+                )
+            log.info(
+                "UnivFD: head loaded, backbone missing=%d unexpected=%d",
+                len(missing), len(unexpected),
+            )
+            self.model = net.to(device).eval()
+            self._use_placeholder = False
+            log.info("UnivFD: loaded ok")
+        except Exception as e:
+            log.warning("UnivFD load failed (%s) — using placeholder", e)
 
     def predict(self, face_bgr: np.ndarray) -> DetectorOutput:
         if self._use_placeholder:
-            # Neutral score (0.5) — slot effectively abstains until inference
-            # path is implemented. Combined with weight_xray=0.0 in config.py
-            # this slot makes no contribution to the final verdict.
             gray = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
             blur = cv2.GaussianBlur(gray, (0, 0), sigmaX=3.0)
             hp = np.abs(gray - blur)
@@ -74,7 +120,6 @@ class FaceXrayDetector(DetectorBase):
         ])
         x = tf(face_bgr[:, :, ::-1].copy()).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            logits = self.model(x)               # (1, 2)
-            probs = torch.softmax(logits, dim=1)
-            score = float(probs[0, 1].item())    # fake class
+            logit = self.model(x)                    # (1, 1)
+            score = float(torch.sigmoid(logit)[0, 0].item())
         return DetectorOutput(score=score, heatmap=None)

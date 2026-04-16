@@ -15,8 +15,8 @@ class Aggregated:
 def aggregate(effort: float, xray: float, spsl: float) -> Aggregated:
     """Weighted soft-vote across the three detectors.
 
-    effort = SBI (CVPR 2022)
-    xray   = FatFormer (CVPR 2024)
+    effort = SBI      (CVPR 2022)
+    xray   = UnivFD   (CVPR 2023)
     spsl   = C2P-CLIP (AAAI 2025)
     """
     s = get_settings()

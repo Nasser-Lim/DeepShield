@@ -48,6 +48,11 @@ class InferRequest(BaseModel):
 class ModelScoreOut(BaseModel):
     score: float = Field(..., ge=0.0, le=1.0)
     heatmap_b64: str | None = None
+    # JPEG TTA (Test-Time Augmentation): score on Q=75 re-encoded crop.
+    # Large raw−tta gap suggests the model is keying on JPEG artifacts,
+    # not AI generation fingerprints.
+    score_raw: float | None = Field(default=None, ge=0.0, le=1.0)
+    score_tta: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class InferResponse(BaseModel):
@@ -56,6 +61,9 @@ class InferResponse(BaseModel):
     spsl: ModelScoreOut
     face_bbox: list[int]
     overlay_b64: str
+    # TTA-adjusted final scores used by the ensemble. When jpeg_tta_delta
+    # is high (>0.3), the verdict should be treated with low confidence.
+    jpeg_tta_delta: float | None = None
 
 
 # ── app lifecycle ──────────────────────────────────────────────────────────
@@ -139,13 +147,51 @@ async def infer(req: InferRequest) -> InferResponse:
             raise HTTPException(422, "이미지에서 얼굴을 감지할 수 없습니다. 얼굴이 포함된 이미지를 업로드해 주세요.")
         raise
 
-    async def run(det: DetectorBase):
-        return await asyncio.to_thread(det.predict, crop.patch)
+    # JPEG TTA: re-encode the face crop at Q=75 so models see a
+    # "compressed-twice" copy. If scores drop sharply on the re-encoded
+    # copy, the model was keying on JPEG artifacts, not AI fingerprints.
+    import cv2 as _cv2
+    ok, enc = _cv2.imencode(".jpg", crop.patch, [_cv2.IMWRITE_JPEG_QUALITY, 75])
+    if ok:
+        crop_tta = _cv2.imdecode(enc, _cv2.IMREAD_COLOR)
+    else:
+        crop_tta = crop.patch  # fallback: no TTA if encode fails
 
-    effort_out, xray_out, spsl_out = await asyncio.gather(
-        run(detectors["effort"]),
-        run(detectors["xray"]),
-        run(detectors["spsl"]),
+    async def run(det: DetectorBase, patch):
+        return await asyncio.to_thread(det.predict, patch)
+
+    (
+        effort_raw, xray_raw, spsl_raw,
+        effort_tta, xray_tta, spsl_tta,
+    ) = await asyncio.gather(
+        run(detectors["effort"], crop.patch),
+        run(detectors["xray"],   crop.patch),
+        run(detectors["spsl"],   crop.patch),
+        run(detectors["effort"], crop_tta),
+        run(detectors["xray"],   crop_tta),
+        run(detectors["spsl"],   crop_tta),
+    )
+
+    # Final score per detector = mean(raw, tta). Averaging damps
+    # predictions that are unstable under benign re-compression.
+    def _mean(a, b) -> float:
+        return float((a.score + b.score) / 2.0)
+
+    effort_score = _mean(effort_raw, effort_tta)
+    xray_score   = _mean(xray_raw,   xray_tta)
+    spsl_score   = _mean(spsl_raw,   spsl_tta)
+
+    # Reuse the raw heatmap for overlay (TTA crop has no meaningful heatmap).
+    effort_out = type(effort_raw)(score=effort_score, heatmap=effort_raw.heatmap)
+    xray_out   = type(xray_raw)(  score=xray_score,   heatmap=xray_raw.heatmap)
+    spsl_out   = type(spsl_raw)(  score=spsl_score,   heatmap=spsl_raw.heatmap)
+
+    # Confidence signal for downstream UI: absolute gap between raw and
+    # TTA scores averaged across detectors. >0.3 = low-confidence verdict.
+    tta_delta = float(
+        (abs(effort_raw.score - effort_tta.score)
+         + abs(xray_raw.score - xray_tta.score)
+         + abs(spsl_raw.score - spsl_tta.score)) / 3.0
     )
 
     # Use the first available heatmap for overlay, or just the face crop
@@ -159,16 +205,23 @@ async def infer(req: InferRequest) -> InferResponse:
         overlay = crop.patch
     overlay_b64 = encode_png_b64(overlay)
 
-    def pack(out) -> ModelScoreOut:
+    def pack(out, raw, tta) -> ModelScoreOut:
+        heatmap_b64 = None
         if out.heatmap is not None:
             vis = overlay_on_face(crop.patch, out.heatmap)
-            return ModelScoreOut(score=out.score, heatmap_b64=encode_png_b64(vis))
-        return ModelScoreOut(score=out.score)
+            heatmap_b64 = encode_png_b64(vis)
+        return ModelScoreOut(
+            score=out.score,
+            heatmap_b64=heatmap_b64,
+            score_raw=float(raw.score),
+            score_tta=float(tta.score),
+        )
 
     return InferResponse(
-        effort=pack(effort_out),
-        xray=pack(xray_out),
-        spsl=pack(spsl_out),
+        effort=pack(effort_out, effort_raw, effort_tta),
+        xray=pack(xray_out, xray_raw, xray_tta),
+        spsl=pack(spsl_out, spsl_raw, spsl_tta),
         face_bbox=list(crop.bbox),
         overlay_b64=overlay_b64,
+        jpeg_tta_delta=round(tta_delta, 4),
     )

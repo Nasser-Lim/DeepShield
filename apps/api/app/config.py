@@ -15,15 +15,15 @@ class Settings(BaseSettings):
     runpod_inference_timeout: float = 60.0
 
     # Ensemble weights (must sum to 1.0)
-    # effort = SBI (CVPR 2022)    — blending artifact detector
-    # xray   = FatFormer (CVPR 2024) — CLIP-based forgery-aware transformer
-    # spsl   = C2P-CLIP (AAAI 2025)  — category prompt CLIP, low false-positive
+    # effort = SBI    (CVPR 2022)  — EfficientNet-B4, face blending artifacts
+    # xray   = UnivFD (CVPR 2023)  — CLIP ViT-L/14 linear probe, JPEG-robust
+    # spsl   = C2P-CLIP (AAAI 2025) — CLIP ViT-L/14 with category prompts
     #
-    # FatFormer inference path is not yet implemented (placeholder neutral 0.5).
-    # Slot weight is 0.0 until the language-guided alignment forward is ported.
-    weight_effort: float = 0.50
-    weight_xray: float = 0.00
-    weight_spsl: float = 0.50
+    # Equal weight across backbones: SBI (EfficientNet) vs UnivFD/C2P-CLIP
+    # (both CLIP-based, but trained with different objectives and datasets).
+    weight_effort: float = 0.35
+    weight_xray: float = 0.35
+    weight_spsl: float = 0.30
 
     # Verdict thresholds
     threshold_safe: float = 0.30
