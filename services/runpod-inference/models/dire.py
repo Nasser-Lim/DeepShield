@@ -142,6 +142,14 @@ class DireDetector(DetectorBase):
         # We scale to [0, 1] by dividing by 2 to match the uint8/255 normalization.
         dire = (x.float() - recon.float()).abs() / 2.0  # [0, 1]
 
+        # Debug stats
+        log.info(
+            "DEBUG x: min=%.4f max=%.4f mean=%.4f | recon: min=%.4f max=%.4f mean=%.4f | dire: min=%.4f max=%.4f mean=%.4f",
+            x.min().item(), x.max().item(), x.mean().item(),
+            recon.min().item(), recon.max().item(), recon.mean().item(),
+            dire.min().item(), dire.max().item(), dire.mean().item(),
+        )
+
         prob = self._classify(dire)
 
         # Heatmap for visualization: channel-mean, normalize to [0, 1]
@@ -177,4 +185,6 @@ class DireDetector(DetectorBase):
         std = IMAGENET_STD.to(x.device, x.dtype)
         x = (x - mean) / std
         logit = self.classifier(x)
-        return torch.sigmoid(logit).flatten()[0].item()
+        prob = torch.sigmoid(logit).flatten()[0].item()
+        log.info("DEBUG classifier: logit=%.4f prob=%.4f", logit.flatten()[0].item(), prob)
+        return prob
