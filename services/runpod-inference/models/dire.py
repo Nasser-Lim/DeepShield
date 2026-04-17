@@ -8,6 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models import resnet50
 
@@ -24,6 +25,12 @@ class DireDetector(DetectorBase):
 
     Pipeline: image -> ADM DDIM reverse -> DDIM forward reconstruction ->
     |orig - recon| -> ResNet-50 binary classifier -> synthetic probability.
+
+    Reference: compute_dire.py in ZhendongWang6/DIRE
+      reverse_fn(model, shape, noise=imgs, clip_denoised=True)
+      sample_fn(model, shape, noise=latent, clip_denoised=True)
+      dire = th.abs(imgs - recons)
+      dire = (dire * 255.0 / 2.0).clamp(0, 255).to(th.uint8)
     """
 
     name = "dire"
@@ -84,6 +91,8 @@ class DireDetector(DetectorBase):
         for p in self.model.parameters():
             p.requires_grad_(False)
 
+        # Classifier: ResNet-50 with fc replaced to Linear(2048, 1)
+        # Matches DIRE official: resnet50(num_classes=1) then model.fc = nn.Linear(2048, 1)
         cls_path = os.environ.get(
             "DIRE_CLASSIFIER_WEIGHTS",
             "/workspace/dire_v1/weights/classifier/lsun_adm.pth",
@@ -109,21 +118,34 @@ class DireDetector(DetectorBase):
         if self.model is None or self.diffusion is None or self.classifier is None:
             raise RuntimeError("DireDetector.load() must be called first")
 
+        # Preprocess: BGR -> RGB -> center crop -> 256x256 -> [-1, 1]
         x = self._preprocess_for_adm(image_bgr).to(self.device)
         if self.use_fp16:
             x = x.half()
 
+        shape = x.shape  # (1, 3, 256, 256)
+
+        # DDIM reverse: encode image into latent
+        # Official API: ddim_reverse_sample_loop(model, shape, noise=imgs, ...)
         latent = self.diffusion.ddim_reverse_sample_loop(
-            self.model, x, clip_denoised=True,
-        )
-        recon = self.diffusion.ddim_sample_loop(
-            self.model, x.shape, noise=latent, clip_denoised=True,
+            self.model, shape, noise=x, clip_denoised=True,
         )
 
-        dire = (x.float() - recon.float()).abs().clamp(0.0, 1.0)
+        # DDIM forward: reconstruct from latent
+        # Official API: ddim_sample_loop(model, shape, noise=latent, ...)
+        recon = self.diffusion.ddim_sample_loop(
+            self.model, shape, noise=latent, clip_denoised=True,
+        )
+
+        # DIRE map: absolute pixel difference.
+        # x and recon are in [-1, 1], so abs diff is in [0, 2].
+        # Official: dire = th.abs(imgs - recons) then dire * 255/2 -> uint8
+        # We scale to [0, 1] by dividing by 2 to match the uint8/255 normalization.
+        dire = (x.float() - recon.float()).abs() / 2.0  # [0, 1]
 
         prob = self._classify(dire)
 
+        # Heatmap for visualization: channel-mean, normalize to [0, 1]
         heatmap = dire.mean(dim=1).squeeze(0).cpu().numpy().astype(np.float32)
         hm_max = float(heatmap.max()) if heatmap.size else 0.0
         if hm_max > 0:
@@ -132,6 +154,7 @@ class DireDetector(DetectorBase):
         return DetectorOutput(score=float(prob), heatmap=heatmap)
 
     def _preprocess_for_adm(self, image_bgr: np.ndarray) -> torch.Tensor:
+        """Center-crop to square, resize to image_size, scale to [-1, 1]."""
         h, w = image_bgr.shape[:2]
         side = min(h, w)
         top = (h - side) // 2
@@ -139,10 +162,15 @@ class DireDetector(DetectorBase):
         sq = image_bgr[top:top + side, left:left + side]
         sq = cv2.resize(sq, (self.image_size, self.image_size), interpolation=cv2.INTER_CUBIC)
         rgb = cv2.cvtColor(sq, cv2.COLOR_BGR2RGB)
-        arr = rgb.astype(np.float32) / 127.5 - 1.0
+        arr = rgb.astype(np.float32) / 127.5 - 1.0  # [0,255] -> [-1, 1]
         return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
 
     def _classify(self, dire: torch.Tensor) -> float:
+        """ResNet-50 binary classifier on the DIRE error map.
+
+        Input: DIRE map in [0, 1], shape (1, 3, 256, 256).
+        Official demo.py: resize 256 -> center crop 224 -> ImageNet normalize.
+        """
         x = F.interpolate(dire, size=(256, 256), mode="bilinear", align_corners=False)
         off = (256 - 224) // 2
         x = x[:, :, off:off + 224, off:off + 224]
