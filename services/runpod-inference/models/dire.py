@@ -150,10 +150,9 @@ class DireDetector(DetectorBase):
             dire.min().item(), dire.max().item(), dire.mean().item(),
         )
 
-        # Official demo.py feeds the ORIGINAL image to the classifier with its own
-        # preprocessing: PIL Resize(256) -> CenterCrop(224) -> ToTensor -> ImageNet norm.
-        # We must re-preprocess image_bgr independently (not reuse the ADM-cropped tensor).
-        prob = self._classify_from_bgr(image_bgr)
+        # Official implementation feeds the derived DIRE map (error map) to the classifier,
+        # after quantizing to uint8 (mimicking PNG save) and applying ImageNet transforms.
+        prob = self._classify_dire_map(dire)
 
         # Heatmap for visualization: channel-mean, normalize to [0, 1]
         heatmap = dire.mean(dim=1).squeeze(0).cpu().numpy().astype(np.float32)
@@ -175,39 +174,30 @@ class DireDetector(DetectorBase):
         arr = rgb.astype(np.float32) / 127.5 - 1.0  # [0,255] -> [-1, 1]
         return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
 
-    def _classify_from_bgr(self, image_bgr: np.ndarray) -> float:
-        """ResNet-50 binary classifier on the original image.
-
-        Mirrors official demo.py exactly:
-          PIL Resize(256, shortest edge) -> CenterCrop(224) -> ToTensor -> ImageNet norm.
+    def _classify_dire_map(self, dire: torch.Tensor) -> float:
+        """ResNet-50 binary classifier on the DIRE map.
+        
+        Mirrors official implementation exactly:
+          1. Quantize to uint8 (mimics saving to disk as PNG)
+          2. CenterCrop(224)
+          3. ToTensor (0-1) -> ImageNet normalize
         """
-        from PIL import Image as PILImage
-        # BGR -> RGB PIL image
-        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        pil = PILImage.fromarray(rgb)
-
-        # Resize shortest edge to 256 (same as transforms.Resize(256))
-        w, h = pil.size
-        if w < h:
-            new_w, new_h = 256, int(256 * h / w)
-        else:
-            new_w, new_h = int(256 * w / h), 256
-        pil = pil.resize((new_w, new_h), PILImage.BICUBIC)
-
-        # CenterCrop(224)
-        w, h = pil.size
-        left = (w - 224) // 2
-        top = (h - 224) // 2
-        pil = pil.crop((left, top, left + 224, top + 224))
-
-        # ToTensor: [0,255] -> [0,1], then ImageNet normalize
-        arr = np.array(pil, dtype=np.float32) / 255.0
-        x = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+        # 1. Quantize to uint8 to mimic PNG artifact
+        # Our `dire` is float in range [0, 1].
+        dire_uint8 = torch.round(dire * 255.0).clamp(0, 255).to(torch.uint8)
+        
+        # 2. CenterCrop(224)
+        _, _, h, w = dire_uint8.shape
+        margin_h = (h - 224) // 2
+        margin_w = (w - 224) // 2
+        cropped = dire_uint8[:, :, margin_h:margin_h+224, margin_w:margin_w+224]
+        
+        # 3. ToTensor: [0,255] -> [0,1], then ImageNet normalize
+        x = cropped.float() / 255.0
         mean = IMAGENET_MEAN.to(x.device, x.dtype)
         std = IMAGENET_STD.to(x.device, x.dtype)
         x = (x - mean) / std
-        x = x.to(self.device)
-
+        
         logit = self.classifier(x)
         prob = torch.sigmoid(logit).flatten()[0].item()
         log.info("DEBUG classifier: logit=%.4f prob=%.4f", logit.flatten()[0].item(), prob)
