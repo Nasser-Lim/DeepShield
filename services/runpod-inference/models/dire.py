@@ -71,7 +71,7 @@ class DireDetector(DetectorBase):
             attention_resolutions="32,16,8",
             resblock_updown=True,
             use_scale_shift_norm=True,
-            use_fp16=self.use_fp16,
+            use_fp16=False,
             diffusion_steps=1000,
             noise_schedule="linear",
             timestep_respacing=respacing,
@@ -86,8 +86,9 @@ class DireDetector(DetectorBase):
         state = torch.load(adm_path, map_location="cpu")
         self.model.load_state_dict(state, strict=False)
         self.model.to(device).eval()
-        if self.use_fp16:
-            self.model.convert_to_fp16()
+        # NOTE: skip convert_to_fp16() — guided_diffusion's partial fp16
+        # conversion leaves the final out conv in float32, causing dtype
+        # mismatch at runtime. Float32 is fine for 256x256 on A5000 24GB.
         for p in self.model.parameters():
             p.requires_grad_(False)
 
@@ -120,8 +121,6 @@ class DireDetector(DetectorBase):
 
         # Preprocess: BGR -> RGB -> center crop -> 256x256 -> [-1, 1]
         x = self._preprocess_for_adm(image_bgr).to(self.device)
-        if self.use_fp16:
-            x = x.half()
 
         shape = x.shape  # (1, 3, 256, 256)
 
