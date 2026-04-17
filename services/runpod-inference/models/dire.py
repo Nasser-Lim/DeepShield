@@ -68,7 +68,6 @@ class DireDetector(DetectorBase):
             diffusion_steps=1000,
             noise_schedule="linear",
             timestep_respacing=respacing,
-            use_ddim=True,
         ))
         self.model, self.diffusion = create_model_and_diffusion(**defaults)
 
