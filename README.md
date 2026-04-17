@@ -1,6 +1,6 @@
-# DeepShield — 뉴스룸 딥페이크 탐지 시스템
+# DeepShield — 뉴스룸 디퓨전 생성 이미지 탐지 시스템
 
-제보 이미지의 AI 생성 여부를 삼중 모델 앙상블로 판정하는 뉴스룸 전용 도구.
+제보 이미지의 AI 생성 여부를 **DIRE (Diffusion Reconstruction Error, ICCV 2023)** 단일 모델로 판정합니다. Midjourney, Stable Diffusion, Nano-Banana 등 디퓨전 계열 생성물을 전체 이미지 기준으로 탐지합니다.
 
 ---
 
@@ -16,13 +16,11 @@ FastAPI 게이트웨이 (apps/api :8080)
     │  2. POST /infer   <- file_id
     ▼
 RunPod 추론 서버 (services/runpod-inference :8000)
-    ├─ MTCNN 얼굴 탐지  (얼굴 없으면 422 반환)
-    ├─ Xception         가중치 0.50
-    ├─ F3Net (FAD)      가중치 0.20  (score^1.8 recalibration 적용)
-    └─ SPSL             가중치 0.30
-         |
-         v  가중 앙상블
-판정: safe (< 0.35) · caution (0.35~0.75) · risk (>= 0.75)
+    └─ DIRE
+         ├─ ADM UNet: DDIM reverse + forward (timestep_respacing=ddim20)
+         ├─ |x - x_recon| -> DIRE map
+         └─ ResNet-50: DIRE map -> 합성 확률
+판정: safe (< 0.30) · caution (0.30 ~ 0.70) · risk (>= 0.70)
 ```
 
 **이미지는 추론 시간 동안 Pod의 `UPLOAD_DIR`에만 임시 저장됩니다. 외부 스토리지·인증 불필요.**
@@ -31,23 +29,20 @@ RunPod 추론 서버 (services/runpod-inference :8000)
 
 ## 모델 구성
 
-| 슬롯 | 모델 | 출처 | 입력 | 앙상블 가중치 |
-|---|---|---|---|---|
-| `effort` | Xception | DeepfakeBench v1.0.1 | 256x256 RGB 3ch | **0.50** |
-| `xray` | F3Net (FAD) | DeepfakeBench v1.0.1 | 256x256 DCT 12ch | **0.20** |
-| `spsl` | SPSL | DeepfakeBench v1.0.1 | 256x256 RGB+Phase 4ch | **0.30** |
+| 슬롯 | 모델 | 역할 | 입력 |
+|---|---|---|---|
+| `dire` | ADM (256x256 uncond) + ResNet-50 | DDIM 왕복 재구성 오차맵 + 이진 분류 | 256×256 [-1, 1] 정규화 |
 
-- DeepfakeBench 코드 의존성 없음 — 순수 PyTorch + timm으로 아키텍처 자체 구현, `.pth` 가중치만 로드
-- F3Net은 실사 사진에 대한 상향 bias가 있어 `score^1.8` power-law recalibration 적용
-- 얼굴 탐지는 **MTCNN** (confidence >= 0.90) 사용. Haar cascade는 fallback 전용
+- DIRE는 얼굴이 아닌 **전체 이미지** 기반이므로 얼굴 탐지(MTCNN) 경로는 없음
+- 공식 저장소(`ZhendongWang6/DIRE`)의 `guided_diffusion`을 `PYTHONPATH`로 주입해 사용
+- `timestep_respacing=ddim20`으로 속도 최적화 (A5000 기준 이미지당 ~2-3초)
+- ADM 가중치는 `DIRE_ADM_WEIGHTS` env로 전환 가능 (uncond 범용 / LSUN 침실)
 
-### 현재 한계
+### 알려진 한계
 
-세 모델 모두 FaceForensics++ (2018~2019년) 기반으로 학습됐습니다.
-
-- Stable Diffusion, Midjourney, DALL-E 등 최신 Diffusion 모델 생성 이미지에 대한 일반화 능력이 제한적
-- 고압축 JPEG 언론 사진에서 F3Net이 오탐할 수 있음
-- 얼굴이 가려지거나 없는 이미지는 탐지 범위 밖 (422 에러 반환)
+- 공식 ResNet-50 분류기는 LSUN-ADM 쌍으로 학습되어 있어 도메인 시프트가 클수록 정확도가 저하될 수 있음
+- DDIM 왕복 재구성이 비싼 연산이므로 CPU 추론은 실용적이지 않음 (로컬 스모크 테스트용)
+- PNG/JPG 파일 포맷 편향(Issue #30) 대응으로 서버에서 업로드 바이트를 PIL로 디코딩 후 처리
 
 ---
 
@@ -58,10 +53,10 @@ DeepShield/
 ├── apps/
 │   ├── api/                        FastAPI 게이트웨이 (Python)
 │   │   ├── app/
-│   │   │   ├── config.py           앙상블 가중치·threshold 설정
+│   │   │   ├── config.py           threshold 설정
 │   │   │   ├── routes/analyze.py   /analyze 엔드포인트
 │   │   │   ├── services/
-│   │   │   │   ├── ensemble.py     가중 앙상블 + F3Net recalibration
+│   │   │   │   ├── verdict.py      DIRE score -> safe/caution/risk
 │   │   │   │   └── runpod_client.py RunPod HTTP 클라이언트
 │   │   │   └── schemas/analysis.py Pydantic 스키마
 │   │   └── dev.ps1
@@ -70,8 +65,8 @@ DeepShield/
 │       ├── components/
 │       │   ├── DropZone.tsx        이미지 업로드
 │       │   ├── TrustMeter.tsx      조작 확률 게이지
-│       │   ├── EvidenceViewer.tsx  히트맵 오버레이 (face_bbox 기반 위치)
-│       │   ├── ModelScoreTabs.tsx  모델별 점수·설명 탭
+│       │   ├── EvidenceViewer.tsx  전체 이미지 히트맵 오버레이
+│       │   ├── ModelScoreTabs.tsx  DIRE 점수·설명
 │       │   └── ReportExport.tsx    PDF 내보내기
 │       └── lib/
 │           ├── api.ts              분석 API 호출
@@ -80,17 +75,14 @@ DeepShield/
 │   └── runpod-inference/           RunPod 추론 서버 (Python)
 │       ├── server.py               FastAPI 서버 (upload + infer)
 │       ├── models/
-│       │   ├── _xception.py        순수 PyTorch Xception 구현
-│       │   ├── effort.py           Xception 탐지기
-│       │   ├── face_detect.py      MTCNN 얼굴 탐지 (Haar fallback)
-│       │   ├── face_xray.py        F3Net + FAD head 탐지기
-│       │   └── spsl.py             SPSL (RGB+Phase) 탐지기
+│       │   ├── base.py             DetectorBase / DetectorOutput
+│       │   └── dire.py             DireDetector (ADM + ResNet-50)
 │       ├── utils/
 │       │   ├── heatmap.py          히트맵 생성·오버레이
 │       │   └── io.py               이미지 로드 유틸
 │       └── requirements.txt
 ├── docs/
-│   └── runpod-setup.md             RunPod 배포 상세 가이드
+│   └── runpod-setup.md             RunPod 배포 상세 가이드 (dire_v1 볼륨 레이아웃)
 ├── .env.example
 └── start.ps1                       로컬 전체 스택 기동
 ```
@@ -114,29 +106,17 @@ cp .env.example .env
 `.env` 주요 항목:
 
 ```env
-# 실제 RunPod 추론 서버 URL (로컬 추론 서버 사용 시 http://localhost:8000)
 RUNPOD_INFERENCE_URL=https://[POD_ID]-8000.proxy.runpod.net
+DIRE_REPO_PATH=/workspace/dire_v1/repo
+DIRE_ADM_WEIGHTS=/workspace/dire_v1/weights/256x256_diffusion_uncond.pt
+DIRE_CLASSIFIER_WEIGHTS=/workspace/dire_v1/weights/classifier/lsun_adm.pth
+DIRE_TIMESTEP_RESPACING=ddim20
 ```
 
 ### 전체 스택 한 번에 실행
 
 ```powershell
 .\start.ps1
-```
-
-세 서비스가 병렬로 기동됩니다. `Ctrl+C`로 전체 종료.
-
-### 서비스별 개별 실행
-
-```powershell
-# 터미널 1 - 추론 서버 (port 8000)
-cd services\runpod-inference && .\dev.ps1
-
-# 터미널 2 - FastAPI 게이트웨이 (port 8080)
-cd apps\api && .\dev.ps1
-
-# 터미널 3 - Next.js 대시보드 (port 3000)
-cd apps\web && npm run dev
 ```
 
 ### 접속 URL
@@ -147,9 +127,6 @@ cd apps\web && npm run dev
 | API 문서 | http://localhost:8080/docs |
 | 추론 서버 문서 | http://localhost:8000/docs |
 
-> 로컬 추론 서버는 `torch` 미설치 시 placeholder 모드(SHA-1 해시 기반 더미 점수)로 동작합니다.
-> 실제 모델 추론은 RunPod GPU 환경에서만 동작합니다.
-
 ---
 
 ## RunPod 배포
@@ -159,75 +136,26 @@ cd apps\web && npm run dev
 ### 요약
 
 1. RunPod에서 GPU Pod 생성 (RTX A5000 권장, Volume 50GB, Mount Path: `/workspace`)
-2. 웹 터미널에서 최초 셋업:
+2. `/workspace/dire_v1/`에 공식 DIRE 저장소·venv·가중치를 배치
+3. env 설정 후 서버 기동
 
 ```bash
-# 시스템 패키지
-apt-get update && apt-get install -y git wget libgl1 libglib2.0-0
-
-# 코드 클론
-cd /workspace && git clone https://github.com/Nasser-Lim/DeepShield.git deepshield
-
-# Python venv (Volume에 저장 - 재시작 후 재설치 불필요)
-python3 -m venv /workspace/venv --system-site-packages
-source /workspace/venv/bin/activate
-pip install -r /workspace/deepshield/services/runpod-inference/requirements.txt
-pip install mtcnn tensorflow-cpu
-
-# 모델 가중치 다운로드 (~255MB)
-mkdir -p /workspace/weights
-wget -P /workspace/weights "https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.1/xception_best.pth"
-wget -P /workspace/weights "https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.1/f3net_best.pth"
-wget -P /workspace/weights "https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.1/spsl_best.pth"
-```
-
-3. 서버 기동:
-
-```bash
-cd /workspace/deepshield/services/runpod-inference && \
-DEVICE=cuda UPLOAD_DIR=/tmp/deepshield/uploads \
-python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
-```
-
-4. 로컬 `.env` 업데이트:
-
-```env
-RUNPOD_INFERENCE_URL=https://[POD_ID]-8000.proxy.runpod.net
-```
-
-### Pod 재시작 후 복구 (한 줄)
-
-```bash
-cd /workspace/deepshield && git pull && source /workspace/venv/bin/activate && \
-mkdir -p /tmp/deepshield/uploads && cd services/runpod-inference && \
-DEVICE=cuda UPLOAD_DIR=/tmp/deepshield/uploads \
-python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
+source /workspace/dire_v1/venv/bin/activate && export DIRE_REPO_PATH=/workspace/dire_v1/repo && export DIRE_ADM_WEIGHTS=/workspace/dire_v1/weights/256x256_diffusion_uncond.pt && export DIRE_CLASSIFIER_WEIGHTS=/workspace/dire_v1/weights/classifier/lsun_adm.pth && export DIRE_TIMESTEP_RESPACING=ddim20 && export PYTHONPATH=/workspace/dire_v1/repo:/workspace/dire_v1/repo/guided-diffusion && export UPLOAD_DIR=/workspace/dire_v1/uploads && export DEVICE=cuda && cd /workspace/ds_repo/services/runpod-inference && python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
 ---
 
-## 앙상블 파라미터 조정
+## 파라미터 조정
 
-`apps/api/app/config.py`에서 수정합니다.
-
-```python
-# 앙상블 가중치 (합계가 1.0이 아니어도 런타임에 정규화)
-weight_effort: float = 0.50   # Xception - 가장 범용적
-weight_xray:   float = 0.20   # F3Net - 실사 오탐 있어 낮게 설정
-weight_spsl:   float = 0.30   # SPSL
-
-# 판정 임계값
-threshold_safe: float = 0.35  # 미만 -> SAFE
-threshold_risk: float = 0.75  # 이상 -> RISK (사이 -> CAUTION)
-```
-
-F3Net recalibration (`apps/api/app/services/ensemble.py`):
+`apps/api/app/config.py`:
 
 ```python
-# 실사 사진의 F3Net 과대평가를 보정. 0.85 -> 0.74 / 0.99 -> 0.98
-def _recalibrate_xray(score: float) -> float:
-    return score ** 1.8
+threshold_safe: float = 0.30  # 미만 -> SAFE
+threshold_risk: float = 0.70  # 이상 -> RISK (사이 -> CAUTION)
+runpod_inference_timeout: float = 120.0  # DDIM 왕복 시간 고려
 ```
+
+속도/정확도 트레이드오프는 Pod의 `DIRE_TIMESTEP_RESPACING`으로 조정합니다 (`ddim20` 기본, 더 빠르게 `ddim10`, 더 정확하게 `ddim50`).
 
 ---
 
@@ -236,6 +164,6 @@ def _recalibrate_xray(score: float) -> float:
 | HTTP | 메시지 | 원인 |
 |---|---|---|
 | 415 | unsupported media type | JPEG/PNG/WebP/GIF 이외 파일 업로드 |
-| 400 | empty upload | 빈 파일 |
-| 422 | 이미지에서 얼굴을 감지할 수 없습니다 | MTCNN이 얼굴을 찾지 못함 (얼굴 없는 이미지, 가려진 얼굴) |
+| 400 | empty upload / image load failed | 빈 파일 또는 디코딩 실패 |
+| 404 | file_id not found | /upload 실패 후 /infer 호출 |
 | 502 | inference failed | RunPod 서버 연결 실패 또는 내부 오류 |

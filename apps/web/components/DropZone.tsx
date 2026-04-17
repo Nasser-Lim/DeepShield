@@ -87,7 +87,7 @@ export function DropZone({ onResult }: { onResult: (r: AnalyzeResult, file: File
             {isDragActive ? "여기에 놓으세요" : "제보 이미지를 드래그하거나 클릭해 업로드"}
           </div>
           <div className="mt-1 text-sm text-slate-500">
-            Xception · F3Net · SPSL 세 모델이 독립 추론 후 가중 앙상블로 판정합니다
+            DIRE 모델이 전체 이미지를 재구성하여 디퓨전 생성 여부를 판정합니다
           </div>
         </>
       )}

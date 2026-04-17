@@ -12,8 +12,8 @@ def colorize(heatmap: np.ndarray) -> np.ndarray:
     return cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
 
 
-def overlay_on_face(face_bgr: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45) -> np.ndarray:
+def overlay_on_image(image_bgr: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45) -> np.ndarray:
     coloured = colorize(heatmap)
-    if coloured.shape[:2] != face_bgr.shape[:2]:
-        coloured = cv2.resize(coloured, (face_bgr.shape[1], face_bgr.shape[0]))
-    return cv2.addWeighted(face_bgr, 1 - alpha, coloured, alpha, 0)
+    if coloured.shape[:2] != image_bgr.shape[:2]:
+        coloured = cv2.resize(coloured, (image_bgr.shape[1], image_bgr.shape[0]))
+    return cv2.addWeighted(image_bgr, 1 - alpha, coloured, alpha, 0)

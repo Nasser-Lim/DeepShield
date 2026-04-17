@@ -3,17 +3,11 @@ export type Verdict = "safe" | "caution" | "risk";
 export interface ModelScore {
   score: number;
   heatmap_b64: string | null;
-  score_raw?: number | null;
-  score_tta?: number | null;
 }
 
 export interface InferResponse {
-  effort: ModelScore;
-  xray: ModelScore;
-  spsl: ModelScore;
-  face_bbox: [number, number, number, number];
+  dire: ModelScore;
   overlay_b64: string;
-  jpeg_tta_delta?: number | null;
 }
 
 export interface AnalyzeResult {

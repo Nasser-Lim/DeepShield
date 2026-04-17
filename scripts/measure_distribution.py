@@ -1,4 +1,4 @@
-"""Batch-run inference on a folder of images and dump scores to CSV.
+"""Batch-run DIRE inference on a folder of images and dump scores to CSV.
 
 Usage:
     python scripts/measure_distribution.py \\
@@ -9,12 +9,11 @@ Usage:
 
 Iterate over a directory of labelled samples (real press photos in one run,
 AI-generated samples in another), POST each to the RunPod inference endpoint,
-and write per-image detector scores plus JPEG TTA deltas to CSV.
+and write per-image DIRE scores to CSV.
 
 Use the output to:
 - Decide the threshold_risk cutoff (e.g. 90th percentile of "real" scores)
-- Identify which detector drives false positives on your specific domain
-- Measure how JPEG TTA delta correlates with label
+- Measure the separation between real vs. diffusion-generated distributions
 """
 from __future__ import annotations
 
@@ -27,14 +26,13 @@ import httpx
 
 
 def analyze_one(client: httpx.Client, api_url: str, image_path: Path) -> dict:
-    # Two-step: /upload to get file_id, then /infer.
     with image_path.open("rb") as fh:
         files = {"image": (image_path.name, fh, "image/jpeg")}
         up = client.post(f"{api_url}/upload", files=files, timeout=60.0)
     up.raise_for_status()
     file_id = up.json()["file_id"]
 
-    r = client.post(f"{api_url}/infer", json={"file_id": file_id}, timeout=120.0)
+    r = client.post(f"{api_url}/infer", json={"file_id": file_id}, timeout=180.0)
     r.raise_for_status()
     return r.json()
 
@@ -55,13 +53,7 @@ def main() -> int:
         print(f"no images found under {args.input_dir}", file=sys.stderr)
         return 1
 
-    fieldnames = [
-        "filename", "label",
-        "effort", "effort_raw", "effort_tta",
-        "xray",   "xray_raw",   "xray_tta",
-        "spsl",   "spsl_raw",   "spsl_tta",
-        "jpeg_tta_delta",
-    ]
+    fieldnames = ["filename", "label", "dire"]
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     with args.out.open("w", newline="", encoding="utf-8") as fh, httpx.Client() as client:
@@ -76,21 +68,10 @@ def main() -> int:
             row = {
                 "filename": p.name,
                 "label": args.label,
-                "effort":     res["effort"]["score"],
-                "effort_raw": res["effort"].get("score_raw"),
-                "effort_tta": res["effort"].get("score_tta"),
-                "xray":       res["xray"]["score"],
-                "xray_raw":   res["xray"].get("score_raw"),
-                "xray_tta":   res["xray"].get("score_tta"),
-                "spsl":       res["spsl"]["score"],
-                "spsl_raw":   res["spsl"].get("score_raw"),
-                "spsl_tta":   res["spsl"].get("score_tta"),
-                "jpeg_tta_delta": res.get("jpeg_tta_delta"),
+                "dire": res["dire"]["score"],
             }
             writer.writerow(row)
-            print(f"[{i}/{len(images)}] {p.name}: "
-                  f"effort={row['effort']:.3f} xray={row['xray']:.3f} spsl={row['spsl']:.3f} "
-                  f"Δ={row['jpeg_tta_delta']}")
+            print(f"[{i}/{len(images)}] {p.name}: dire={row['dire']:.3f}")
 
     print(f"\nwrote {args.out}")
     return 0

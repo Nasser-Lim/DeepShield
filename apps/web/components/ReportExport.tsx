@@ -4,8 +4,6 @@ import type { AnalyzeResult } from "@/lib/api";
 
 export function ReportExport({ result }: { result: AnalyzeResult }) {
   const onExport = () => {
-    // Minimal print-based PDF export: opens a printable tab.
-    // Swap for @react-pdf/renderer when a formal template is defined.
     const w = window.open("", "_blank", "width=800,height=1000");
     if (!w) return;
     const score = result.final_score ?? 0;
@@ -26,10 +24,8 @@ export function ReportExport({ result }: { result: AnalyzeResult }) {
 <div style="margin-top:8px;">Verdict: <span class="verdict">${verdict.toUpperCase()}</span>
   &nbsp; Final score: <b>${(score * 100).toFixed(1)}%</b></div>
 <table>
-  <tr><th>Model</th><th>Probability</th></tr>
-  <tr><td>Effort</td><td>${s ? (s.effort.score * 100).toFixed(1) : "-"}%</td></tr>
-  <tr><td>Face X-ray</td><td>${s ? (s.xray.score * 100).toFixed(1) : "-"}%</td></tr>
-  <tr><td>SPSL</td><td>${s ? (s.spsl.score * 100).toFixed(1) : "-"}%</td></tr>
+  <tr><th>Model</th><th>Synthetic probability</th></tr>
+  <tr><td>DIRE (ADM reconstruction)</td><td>${s ? (s.dire.score * 100).toFixed(1) : "-"}%</td></tr>
 </table>
 ${s ? `<img src="data:image/png;base64,${s.overlay_b64}" alt="overlay" />` : ""}
 <script>window.onload = () => window.print();</script>

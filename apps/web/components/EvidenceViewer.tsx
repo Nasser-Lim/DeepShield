@@ -5,36 +5,16 @@ import { useState } from "react";
 export function EvidenceViewer({
   originalUrl,
   overlayB64,
-  faceBbox,
 }: {
   originalUrl: string;
   overlayB64: string;
-  faceBbox: [number, number, number, number]; // [x, y, w, h] in original image pixels
 }) {
   const [alpha, setAlpha] = useState(0.6);
-  const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
-
-  // When the original image loads, record its natural dimensions so we can
-  // convert the pixel-space bbox into percentage-based CSS positions.
-  const onLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
-    const img = e.currentTarget;
-    setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
-  };
-
-  // Convert bbox pixel coords → percentage of original image dimensions
-  const bboxStyle = imgSize
-    ? {
-        left: `${(faceBbox[0] / imgSize.w) * 100}%`,
-        top: `${(faceBbox[1] / imgSize.h) * 100}%`,
-        width: `${(faceBbox[2] / imgSize.w) * 100}%`,
-        height: `${(faceBbox[3] / imgSize.h) * 100}%`,
-      }
-    : { left: "0%", top: "0%", width: "100%", height: "100%" };
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="mb-3 flex items-center justify-between gap-4">
-        <h3 className="font-semibold text-slate-800 shrink-0">히트맵 오버레이</h3>
+        <h3 className="font-semibold text-slate-800 shrink-0">DIRE 오차맵 오버레이</h3>
         <div className="flex items-center gap-2 text-sm text-slate-600 min-w-0">
           <label htmlFor="opacity-slider" className="shrink-0">투명도</label>
           <input
@@ -60,16 +40,15 @@ export function EvidenceViewer({
           src={originalUrl}
           alt="분석 대상 원본 이미지"
           className="w-full rounded-md block"
-          onLoad={onLoad}
         />
-        {/* Overlay is positioned exactly over the detected face bbox */}
+        {/* DIRE is whole-image; overlay spans the entire frame. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={`data:image/png;base64,${overlayB64}`}
           alt=""
           aria-hidden="true"
-          className="absolute pointer-events-none mix-blend-multiply"
-          style={{ ...bboxStyle, opacity: alpha, transition: "opacity 0.15s" }}
+          className="absolute inset-0 w-full h-full pointer-events-none mix-blend-multiply rounded-md"
+          style={{ opacity: alpha, transition: "opacity 0.15s" }}
         />
       </div>
     </div>

@@ -7,8 +7,8 @@ import httpx
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from ..schemas.analysis import AnalyzeResult
-from ..services.ensemble import aggregate
 from ..services.runpod_client import RunPodClient
+from ..services.verdict import verdict_from_score
 
 log = logging.getLogger("analyze")
 router = APIRouter(prefix="/analyze", tags=["analyze"])
@@ -27,7 +27,6 @@ async def create_analysis(image: UploadFile = File(...)) -> AnalyzeResult:
 
     client = RunPodClient()
 
-    # Step 1: Upload to RunPod pod storage
     try:
         upload = await client.upload(
             raw,
@@ -38,18 +37,15 @@ async def create_analysis(image: UploadFile = File(...)) -> AnalyzeResult:
         log.exception("upload to RunPod failed")
         raise HTTPException(502, f"upload failed: {e}") from e
 
-    # Step 2: Run inference using the stored file_id
     try:
         infer = await client.infer(file_id=upload.file_id)
     except httpx.HTTPStatusError as e:
-        # Forward the inference server's status code and message as-is
         raise HTTPException(e.response.status_code, str(e)) from e
     except Exception as e:
         log.exception("inference failed")
         raise HTTPException(502, f"inference failed: {e}") from e
 
-    # Step 3: Weighted ensemble vote
-    agg = aggregate(infer.effort.score, infer.xray.score, infer.spsl.score)
+    agg = verdict_from_score(infer.dire.score)
 
     return AnalyzeResult(
         id=uuid.uuid4().hex,

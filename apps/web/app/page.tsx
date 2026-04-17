@@ -35,8 +35,9 @@ export default function Home() {
         <h1 className="text-2xl font-bold mb-2 text-slate-900">이미지 진위 검증</h1>
         <p className="text-slate-600 mb-4 leading-relaxed">
           제보 이미지를 업로드하면{" "}
-          <strong className="font-semibold text-slate-800">Xception · F3Net · SPSL</strong>{" "}
-          세 모델이 독립적으로 추론하고 가중 앙상블로 최종 판정합니다.
+          <strong className="font-semibold text-slate-800">DIRE (Diffusion Reconstruction Error)</strong>{" "}
+          단일 모델이 전체 이미지를 DDIM 왕복 재구성하여 픽셀 차이맵을 산출하고,
+          ResNet-50 분류기가 디퓨전 생성물 여부를 판정합니다.
         </p>
         <DropZone onResult={handleResult} />
       </section>
@@ -70,7 +71,6 @@ export default function Home() {
               <EvidenceViewer
                 originalUrl={originalUrl}
                 overlayB64={result.scores.overlay_b64}
-                faceBbox={result.scores.face_bbox}
               />
             )}
             <ModelScoreTabs scores={result.scores} />

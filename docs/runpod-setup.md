@@ -1,10 +1,10 @@
-# RunPod A5000 셋업 가이드
+# RunPod A5000 셋업 가이드 (DIRE 단일 모델)
 
 > **설계 원칙**
-> - SBI / UnivFD / C2P-CLIP 순수 PyTorch 구현, 가중치(.pth)만 로드
-> - `/workspace/` 하위 경로명을 **고유 이름**으로 지정해 Pod 재시작 시 RunPod이 초기화하지 않도록 방지
-> - 가중치·venv 모두 Volume에 보존 → Pod 재시작 후 서버 기동만 하면 됨
-> - 추론 파이프라인에 **JPEG TTA**(Q=75 재압축) 적용 → 언론사 고압축 사진에서 압축 아티팩트로 인한 false positive 완화
+> - DIRE (Diffusion Reconstruction Error, ICCV 2023) 단일 모델로 전체 이미지 디퓨전 탐지
+> - `/workspace/dire_v1/` 고유 폴더명을 사용해 Pod 재시작 시 RunPod이 초기화하지 않도록 방지
+> - ADM 가중치·분류기·venv·공식 저장소 모두 Volume에 보존 → Pod 재시작 후 서버 기동만 하면 됨
+> - 얼굴 탐지 경로 없음 (DIRE는 전체 이미지 기반)
 
 ---
 
@@ -23,140 +23,103 @@
 
 ## 디렉토리 구조
 
-> 폴더명에 `ds_` 접두사를 사용해 RunPod 기본 폴더와 충돌을 방지합니다.
+> 고유 이름 `dire_v1`을 사용해 버전/모델별로 분리합니다. 추후 다른 버전 비교 시 `dire_v2/`로 병행 배치 가능.
 
 ```
 /workspace/
-├── ds_repo/                         (DeepShield 저장소)
-│   └── services/runpod-inference/
-│       ├── server.py
-│       ├── models/
-│       │   ├── effort.py            (SBI    — EfficientNet-B4)
-│       │   ├── face_xray.py         (UnivFD — HF CLIPModel ViT-L/14 + linear probe)
-│       │   └── spsl.py              (C2P-CLIP — HF CLIPModel ViT-L/14)
-│       └── requirements.txt
-├── ds_weights/
-│   ├── sbi_best.pth                 (~135MB)
-│   ├── univfd_fc_weights.pth        (~3KB  — head-only linear probe)
-│   └── c2pclip_best.pth             (~1.2GB)
-└── ds_venv/                         (Python 가상환경 — 재시작 후에도 보존)
+├── dire_v1/
+│   ├── repo/                                # git clone of ZhendongWang6/DIRE (guided_diffusion 포함)
+│   ├── venv/                                # --system-site-packages venv
+│   ├── weights/
+│   │   ├── 256x256_diffusion_uncond.pt      # OpenAI ADM 범용 (~2.1GB)
+│   │   ├── lsun_bedroom.pt                  # LSUN Bedroom ADM (선택)
+│   │   └── classifier/
+│   │       └── lsun_adm.pth                 # ResNet-50 분류기 (~100MB)
+│   └── uploads/                             # /tmp 대체, 영속 저장
+└── ds_repo/                                 # DeepShield 저장소 (여전히 사용)
+    └── services/runpod-inference/
+        ├── server.py
+        ├── models/
+        │   ├── base.py
+        │   └── dire.py
+        └── requirements.txt
 ```
 
 ---
 
-## 가중치 파일 (로컬 PC에서 먼저 확보)
+## 가중치 파일
 
-| 모델 | 로컬 파일명 | RunPod 저장 경로 | 크기 |
-|---|---|---|---|
-| SBI | `sbi_best.pth` (FFraw.tar를 이름 변경) | `/workspace/ds_weights/sbi_best.pth` | ~135MB |
-| UnivFD | `fc_weights.pth` ([공식 저장소 pretrained_weights/](https://github.com/WisconsinAIVision/UniversalFakeDetect)) | `/workspace/ds_weights/univfd_fc_weights.pth` | ~3KB |
-| C2P-CLIP | `C2P_CLIP-GenImage_release_20250224.pth` | `/workspace/ds_weights/c2pclip_best.pth` | ~1.2GB |
+| 역할 | 파일명 | RunPod 저장 경로 | 크기 | 취득 방법 |
+|---|---|---|---|---|
+| ADM 재구성 (범용) | `256x256_diffusion_uncond.pt` | `/workspace/dire_v1/weights/256x256_diffusion_uncond.pt` | ~2.1GB | Pod에서 wget |
+| 이진 분류기 | `lsun_adm.pth` | `/workspace/dire_v1/weights/classifier/lsun_adm.pth` | ~270MB | 로컬 → runpodctl |
 
-> **UnivFD는 head-only 가중치(~3KB)**입니다. CLIP ViT-L/14 백본은
-> HuggingFace에서 자동 다운로드됩니다 (C2P-CLIP이 이미 다운받아놓았으므로
-> 캐시 공유). 최초 기동 시 `openai/clip-vit-large-patch14` 다운로드에
-> 수 분이 걸릴 수 있습니다 (~1.7GB).
+- ADM: OpenAI 공식 호스팅에서 Pod가 직접 wget (로컬 경유 불필요)
+- 분류기: 저자 RecDrive `https://rec.ustc.edu.cn/share/ec980150-4615-11ee-be0a-eb822f25e070` (비밀번호: `dire`) 에서 로컬 다운로드 후 runpodctl 전송
+- 나머지 분류기(`lsun_pndm.pth`, `lsun_iddpm.pth` 등)는 추후 비교 실험 시 추가 가능
 
----
-
-## 최초 셋업 절차 (Pod 처음 생성 시)
-
-### Step 1 — 시스템 패키지 + 코드 클론
-
-```
-apt-get update && apt-get install -y git wget libgl1 libglib2.0-0 && git clone https://github.com/Nasser-Lim/DeepShield.git /workspace/ds_repo
-```
+`DIRE_ADM_WEIGHTS` 환경변수로 ADM 가중치를 런타임에 전환합니다.
 
 ---
 
-### Step 2 — Python venv 생성 및 패키지 설치
+## 최초 셋업 절차
+
+### Step 1 — 시스템 패키지 + 저장소 클론
+
+> DIRE 저장소(`/workspace/dire_v1/repo`)가 이미 클론되어 있으면 해당 부분은 건너뜁니다.
 
 ```
-/usr/bin/python3 -m venv /workspace/ds_venv --system-site-packages && source /workspace/ds_venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/ds_repo/services/runpod-inference/requirements.txt && pip install open_clip_torch pytorch_wavelets transformers accelerate mtcnn tensorflow-cpu
+apt-get update && apt-get install -y git wget libgl1 libglib2.0-0 && mkdir -p /workspace/dire_v1/weights/classifier /workspace/dire_v1/uploads && git clone https://github.com/ZhendongWang6/DIRE.git /workspace/dire_v1/repo && git clone https://github.com/Nasser-Lim/DeepShield.git /workspace/ds_repo
 ```
 
-> - `/usr/bin/python3`을 명시해 shell PATH 오염 방지
-> - `--system-site-packages`로 base image의 torch/torchvision/cuda 재사용
-> - `mtcnn tensorflow-cpu`: MTCNN 얼굴 감지기 의존성. venv 생성과 함께 설치해야 안전
-> - tensorflow-cpu를 **단독으로** 나중에 설치하면 venv가 손상될 수 있으므로 반드시 이 명령 전체를 한 번에 실행
+### Step 2 — venv + 패키지 설치
 
----
+```
+/usr/bin/python3 -m venv /workspace/dire_v1/venv --system-site-packages && source /workspace/dire_v1/venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/ds_repo/services/runpod-inference/requirements.txt && pip install blobfile einops tqdm
+```
 
-### Step 3 — 가중치 파일 업로드
+> `guided_diffusion`은 pip 패키지가 아닙니다. 저자 공식 저장소(`/workspace/dire_v1/repo`)를 `PYTHONPATH`로 주입하여 사용합니다 (아래 Step 4 참고).
 
-로컬 PowerShell에서 `runpodctl`로 전송합니다.
+### Step 3 — 가중치 확보
 
-**runpodctl 설치 (최초 1회, 로컬 PowerShell):**
+**분류기 — 로컬 PowerShell에서 runpodctl 전송:**
 
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/runpod/runpodctl/releases/latest/download/runpodctl-windows-amd64.exe" -OutFile "$env:USERPROFILE\runpodctl.exe"
+~\runpodctl.exe send "C:\Users\user\Downloads\lsun_adm.pth"
 ```
 
-**파일 전송 (로컬 PowerShell → RunPod 순서로 1개씩):**
-
-로컬:
-```powershell
-~\runpodctl.exe send "C:\Users\user\Downloads\sbi_best.pth"
+RunPod 웹터미널:
 ```
-RunPod:
-```
-mkdir -p /workspace/ds_weights && cd /workspace/ds_weights && runpodctl receive [CODE]
+cd /workspace/dire_v1/weights/classifier && runpodctl receive [CODE]
 ```
 
-로컬:
-```powershell
-~\runpodctl.exe send "C:\Users\user\Downloads\fc_weights.pth"
-```
-RunPod:
-```
-cd /workspace/ds_weights && runpodctl receive [CODE] && mv fc_weights.pth univfd_fc_weights.pth
-```
-
-로컬:
-```powershell
-~\runpodctl.exe send "C:\Users\user\Downloads\C2P_CLIP-GenImage_release_20250224.pth"
-```
-RunPod:
-```
-cd /workspace/ds_weights && runpodctl receive [CODE] && mv C2P_CLIP-GenImage_release_20250224.pth c2pclip_best.pth
-```
-
-**업로드 확인:**
+**ADM 디퓨전 모델 — Pod에서 직접 wget (~2.1GB, 로컬 경유 불필요):**
 
 ```
-ls -lh /workspace/ds_weights/
+wget -P /workspace/dire_v1/weights/ https://openaipublic.blob.core.windows.net/diffusion/jul-2021/256x256_diffusion_uncond.pt
 ```
 
-예상 출력:
+확인:
 ```
--rw-r--r-- 1 root root 135M sbi_best.pth
--rw-r--r-- 1 root root 3.0K univfd_fc_weights.pth
--rw-r--r-- 1 root root 1.2G c2pclip_best.pth
+ls -lh /workspace/dire_v1/weights/ /workspace/dire_v1/weights/classifier/
 ```
-
----
 
 ### Step 4 — 서버 기동
 
 ```
-source /workspace/ds_venv/bin/activate && mkdir -p /tmp/ds_uploads && cd /workspace/ds_repo/services/runpod-inference && DEVICE=cuda UPLOAD_DIR=/tmp/ds_uploads python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
+source /workspace/dire_v1/venv/bin/activate && export DIRE_REPO_PATH=/workspace/dire_v1/repo && export DIRE_ADM_WEIGHTS=/workspace/dire_v1/weights/256x256_diffusion_uncond.pt && export DIRE_CLASSIFIER_WEIGHTS=/workspace/dire_v1/weights/classifier/lsun_adm.pth && export DIRE_TIMESTEP_RESPACING=ddim20 && export PYTHONPATH=/workspace/dire_v1/repo:/workspace/dire_v1/repo/guided-diffusion && export UPLOAD_DIR=/workspace/dire_v1/uploads && export DEVICE=cuda && cd /workspace/ds_repo/services/runpod-inference && python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
-정상 기동 시 출력:
+정상 기동 시 로그:
 ```
-INFO:inference:SBI: missing=0 unexpected=0
-INFO:inference:SBI: loaded ok
-INFO:inference:UnivFD: head loaded, backbone missing=N unexpected=0   (N=CLIP 백본 관련, 정상)
-INFO:inference:UnivFD: loaded ok
-INFO:inference:C2P-CLIP: missing=N unexpected=2   (N=text_model 관련, 정상)
-INFO:inference:C2P-CLIP: loaded ok
-INFO:inference:FaceDetector: using MTCNN
+INFO:dire:Loading ADM weights from /workspace/dire_v1/weights/256x256_diffusion_uncond.pt
+INFO:dire:Loading classifier weights from /workspace/dire_v1/weights/classifier/lsun_adm.pth
+INFO:dire:classifier: missing=0 unexpected=0
+INFO:dire:DireDetector loaded (device=cuda, respacing=ddim20)
 INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
----
-
-### Step 5 — 로컬 .env 업데이트
+### Step 5 — 로컬 `.env` 업데이트
 
 RunPod 대시보드 → Pod → **Connect** → **HTTP Service [8000]** 에서 공개 URL 확인 후:
 
@@ -171,51 +134,44 @@ RUNPOD_INFERENCE_URL=https://[POD_ID]-8000.proxy.runpod.net
 
 ---
 
-## Pod 재시작 후 복구
-
-> **Stop → Start** 후 컨테이너가 재생성되어 **Public URL이 바뀌고** `/tmp/` 등
-> Volume 외부는 초기화됩니다. `/workspace/ds_venv/`, `/workspace/ds_weights/`,
-> `/workspace/ds_repo/`는 Volume에 보존됩니다.
-
-**복구 한 줄:**
+## Pod 재시작 후 복구 (한 줄)
 
 ```
-source /workspace/ds_venv/bin/activate && mkdir -p /tmp/ds_uploads && cd /workspace/ds_repo/services/runpod-inference && DEVICE=cuda UPLOAD_DIR=/tmp/ds_uploads python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
+source /workspace/dire_v1/venv/bin/activate && export DIRE_REPO_PATH=/workspace/dire_v1/repo && export DIRE_ADM_WEIGHTS=/workspace/dire_v1/weights/256x256_diffusion_uncond.pt && export DIRE_CLASSIFIER_WEIGHTS=/workspace/dire_v1/weights/classifier/lsun_adm.pth && export DIRE_TIMESTEP_RESPACING=ddim20 && export PYTHONPATH=/workspace/dire_v1/repo:/workspace/dire_v1/repo/guided-diffusion && export UPLOAD_DIR=/workspace/dire_v1/uploads && export DEVICE=cuda && cd /workspace/ds_repo/services/runpod-inference && python3 -m uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
-> venv가 손상된 경우 아래 **venv 재생성** 명령을 먼저 실행합니다.
-
-**venv 손상 시 재생성:**
-
-```
-/usr/bin/python3 -m venv /workspace/ds_venv --system-site-packages && source /workspace/ds_venv/bin/activate && pip install --upgrade pip && pip install -r /workspace/ds_repo/services/runpod-inference/requirements.txt && pip install open_clip_torch pytorch_wavelets transformers accelerate mtcnn tensorflow-cpu
-```
-
-**재시작 후 반드시 할 것:**
-
-1. **새 Public URL 확인**: Pod → **Connect** → **HTTP Service [8000]**
-2. **로컬 `.env` 업데이트**: 새 URL로 `RUNPOD_INFERENCE_URL` 교체
-3. **로컬 서비스 재시작**: `.\start.ps1`
+> **새 Public URL**을 반드시 `.env`의 `RUNPOD_INFERENCE_URL`에 반영하고 `.\start.ps1` 재기동.
 
 ---
 
-## 모델 구성
+## 환경 변수
 
-| 슬롯 | 모델 | 아키텍처 | 입력 | 앙상블 가중치 |
-|---|---|---|---|---|
-| `effort` | SBI (CVPR 2022) | EfficientNet-B4 | 380×380 ImageNet 정규화 | 0.35 |
-| `xray` | UnivFD (CVPR 2023) | CLIP ViT-L/14 + linear probe | 224×224 CLIP 정규화 | 0.35 |
-| `spsl` | C2P-CLIP (AAAI 2025) | HF CLIPModel ViT-L/14 | 224×224 CLIP 정규화 | 0.30 |
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `DIRE_REPO_PATH` | `/workspace/dire_v1/repo` | `guided_diffusion` 모듈 검색 경로 |
+| `DIRE_ADM_WEIGHTS` | `/workspace/dire_v1/weights/256x256_diffusion_uncond.pt` | ADM UNet 가중치 (LSUN으로 스위치 가능) |
+| `DIRE_CLASSIFIER_WEIGHTS` | `/workspace/dire_v1/weights/classifier/lsun_adm.pth` | ResNet-50 이진 분류기 |
+| `DIRE_TIMESTEP_RESPACING` | `ddim20` | DDIM 재샘플링 스텝 수 (속도/정확도 트레이드오프) |
+| `DIRE_IMAGE_SIZE` | `256` | ADM 입력 해상도 (기본값 유지 권장) |
+| `UPLOAD_DIR` | `/workspace/dire_v1/uploads` | 업로드 임시 저장소 |
+| `DEVICE` | `cpu` | GPU 사용 시 `cuda` |
 
-> **JPEG TTA 적용**: 각 추론 시 원본 얼굴 크롭과 Q=75 재압축 크롭을 모두
-> 모델에 입력하고 평균 점수를 최종 slot score로 사용합니다. 응답에
-> `score_raw`, `score_tta`, `jpeg_tta_delta` 필드가 포함됩니다. delta가 0.3
-> 이상이면 판정 신뢰도가 낮다는 신호입니다.
+---
 
-판정 기준: `final = (0.35×SBI + 0.35×UnivFD + 0.30×C2P-CLIP)`
-- `< 0.30` → **safe**
-- `0.30 ~ 0.70` → **caution**
-- `≥ 0.70` → **risk**
+## 판정 기준
+
+- **단일 DIRE synthetic probability**를 그대로 사용 (앙상블 가중합 없음)
+- `< 0.30` → **safe** (실제 이미지로 판정)
+- `0.30 ~ 0.70` → **caution** (모호)
+- `≥ 0.70` → **risk** (디퓨전 생성 의심)
+
+---
+
+## 성능 타겟
+
+- `ddim20` 기준 A5000에서 이미지당 **≤ 3초**
+- `ddim10`까지 낮추면 1.5초 내외 (정확도 약간 저하)
+- CPU에서는 `ddim5` 정도로 내려도 수십 초 걸릴 수 있음 (스모크 테스트용)
 
 ---
 
@@ -223,13 +179,22 @@ source /workspace/ds_venv/bin/activate && mkdir -p /tmp/ds_uploads && cd /worksp
 
 | 증상 | 원인 | 해결 |
 |---|---|---|
-| `UnivFD load failed ... fc head not found` | 가중치 파일이 head-only 형식 아님 | 공식 `fc_weights.pth` 재다운로드, `/workspace/ds_weights/univfd_fc_weights.pth`로 저장 |
-| `SBI: ... using placeholder` | 가중치 파일 없음 | `ls /workspace/ds_weights/sbi_best.pth` 확인, 재업로드 |
-| `UnivFD: ... using placeholder` | 가중치 파일 없음 | `ls /workspace/ds_weights/univfd_fc_weights.pth` 확인, 재업로드 |
-| `C2P-CLIP: ... using placeholder` | 가중치 파일 없음 | `ls /workspace/ds_weights/c2pclip_best.pth` 확인, 재업로드 |
-| `MTCNN unavailable ... falling back to Haar` | tensorflow 미설치 | venv 재생성 명령 실행 (mtcnn tensorflow-cpu 포함) |
-| `No module named 'X'` | venv 손상 | 위 **venv 재생성** 명령 실행 |
-| `No such file or directory: '/workspace/ds_venv/bin/python3'` | shell PATH 오염 (이전 venv 잔재) | `exec bash` 후 복구 명령 재실행 |
-| `422 Unprocessable Entity` | MTCNN 얼굴 미감지 | 얼굴이 포함된 이미지 사용 |
-| `CUDA out of memory` | GPU 메모리 부족 | `nvidia-smi`로 좀비 프로세스 확인 후 `kill -9 PID` |
-| 로컬 앱에서 502/503 | Pod 재시작 후 URL 변경 | RunPod에서 새 URL 확인 → `.env` 교체 → `.\start.ps1` |
+| `ModuleNotFoundError: guided_diffusion` | `PYTHONPATH` 미설정 | Step 4의 export 구문 재확인, `/workspace/dire_v1/repo` 존재 확인 |
+| `FileNotFoundError: .../256x256_diffusion_uncond.pt` | 가중치 미업로드 | `ls -lh /workspace/dire_v1/weights/` 확인 후 재전송 |
+| `classifier: missing=XXX unexpected=YYY` (큰 수) | 체크포인트 포맷 불일치 | `lsun_adm.pth`가 `{"model": state_dict}` 또는 `{"state_dict": ...}`로 래핑되어 있으면 자동 언랩하지만, 완전히 다른 아키텍처면 맞는 분류기 체크포인트 재확인 |
+| `CUDA out of memory` | VRAM 부족 | `DIRE_TIMESTEP_RESPACING=ddim10`으로 낮추거나 use_fp16(기본 cuda에서 on) 확인 |
+| `No module named 'X'` | venv 손상 | Step 2 재실행 |
+| 로컬 앱 502/503 | Pod 재시작 후 URL 변경 | `.env`의 `RUNPOD_INFERENCE_URL` 교체 후 `.\start.ps1` |
+| 추론 느림 (>10초) | respacing 기본 1000 스텝 적용됨 | `DIRE_TIMESTEP_RESPACING=ddim20` export 확인 |
+
+---
+
+## 분류기 전환 (실험 시)
+
+RecDrive에서 추가로 받은 분류기(`lsun_pndm.pth`, `lsun_iddpm.pth`, `imagenet_adm.pth` 등)를 `/workspace/dire_v1/weights/classifier/`에 올린 뒤:
+
+```
+export DIRE_CLASSIFIER_WEIGHTS=/workspace/dire_v1/weights/classifier/imagenet_adm.pth
+```
+
+서버 재시작 후 동일 이미지로 스코어를 비교해 가장 분리도가 좋은 분류기를 선택합니다. ADM 본체(`256x256_diffusion_uncond.pt`)는 모든 분류기와 공용으로 사용합니다.
