@@ -150,7 +150,9 @@ class DireDetector(DetectorBase):
             dire.min().item(), dire.max().item(), dire.mean().item(),
         )
 
-        prob = self._classify(dire)
+        # Official demo.py feeds the ORIGINAL image (not the DIRE map) to the classifier.
+        # x is in [-1, 1]; convert to [0, 1] for ToTensor-equivalent input.
+        prob = self._classify((x.float() + 1.0) / 2.0)
 
         # Heatmap for visualization: channel-mean, normalize to [0, 1]
         heatmap = dire.mean(dim=1).squeeze(0).cpu().numpy().astype(np.float32)
@@ -172,13 +174,14 @@ class DireDetector(DetectorBase):
         arr = rgb.astype(np.float32) / 127.5 - 1.0  # [0,255] -> [-1, 1]
         return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
 
-    def _classify(self, dire: torch.Tensor) -> float:
-        """ResNet-50 binary classifier on the DIRE error map.
+    def _classify(self, img_01: torch.Tensor) -> float:
+        """ResNet-50 binary classifier on the original image.
 
-        Input: DIRE map in [0, 1], shape (1, 3, 256, 256).
-        Official demo.py: resize 256 -> center crop 224 -> ImageNet normalize.
+        Official demo.py feeds the ORIGINAL image (not the DIRE map):
+          transforms.Resize(256) -> CenterCrop(224) -> ToTensor() -> ImageNet normalize.
+        Input: original image in [0, 1], shape (1, 3, H, W).
         """
-        x = F.interpolate(dire, size=(256, 256), mode="bilinear", align_corners=False)
+        x = F.interpolate(img_01, size=(256, 256), mode="bilinear", align_corners=False)
         off = (256 - 224) // 2
         x = x[:, :, off:off + 224, off:off + 224]
         mean = IMAGENET_MEAN.to(x.device, x.dtype)
